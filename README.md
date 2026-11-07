@@ -136,6 +136,7 @@ python -m pgr.update --force              :: 只看有没有更新（只读，2 
 | `python scripts\verify_parse.py` | 检查解析残留的模板标记 |
 | `python scripts\audit_full.py` | **全面健壮性审计**（39 项：接口 / 输入边界 / 密钥泄漏 / 并发 / 数据完整性 / 语料残留 / 静态扫描），自起独立实例，失败返回 1 |
 | `python scripts\check_markup.py` | 语料残留门禁：有维基源码漏进正文就返回 1 |
+| `python scripts\check_layout.py` | 页脚几何门禁：按钮与输入框齐平、复选框同左缘、版本号居中（容差 1px，深浅两主题都测） |
 | `python scripts\audit.py` | 语料体量与分布审计 |
 
 ## 已知限制
