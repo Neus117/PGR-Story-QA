@@ -48,6 +48,8 @@
   .card p{margin:0 0 12px}
   .card p:last-child{margin-bottom:0}
   .cite{color:var(--accent);white-space:nowrap}
+  a.cite{cursor:pointer;border-bottom:1px dotted rgba(216,179,106,.5);text-decoration:none}
+  a.cite:hover{background:rgba(216,179,106,.12);border-bottom-color:var(--accent)}
   .cite.bad{color:var(--warn);text-decoration:line-through}
   .card strong{color:var(--fg);font-weight:600}
   .card strong.h{display:block;margin:20px 0 8px;font-size:15px;color:var(--accent)}
@@ -223,8 +225,10 @@ function renderPast(turn, item){
        </a>`
     : `<span class="src flat"><span class="tt">${esc(c.label||'')}</span></span>`;
   const cites = (item.citations||[]).map(citeCard).join('');
+  const labelMap = {};
+  (item.citations||[]).forEach(c => { if(c.label && c.seq) labelMap[c.label] = c; });
   const body = (item.answer||'').split(/\n{2,}/)
-    .map(pp => `<p>${rich(pp).replace(/\n/g,'<br>')}</p>`).join('');
+    .map(pp => `<p>${rich(pp, labelMap).replace(/\n/g,'<br>')}</p>`).join('');
   turn.innerHTML = `<div class="q">${esc(item.question)}</div>
     <div class="card">${body || '<p class="lead">（无回答）</p>'}</div>
     <div class="meta">
@@ -334,13 +338,22 @@ function esc(s){ return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&
 
 // highlight 【...】 citations and 「...」 quotes; render the small markdown the
 // model actually uses (bold and leading dashes) instead of showing asterisks
-function rich(s){
+function rich(s, labelMap){
+  // 必须拼成一行：调用方会对整段做 \n -> <br>，多行标签会被拆坏
+  const link = (raw) => {
+    const hit = labelMap && labelMap[raw];
+    if(!hit || !hit.seq) return `<span class="cite">【${raw}】</span>`;
+    const title = esc(hit.title || '');
+    const sub = esc((hit.category || '') + '／' + (hit.chapter || ''));
+    return `<a class="cite" href="javascript:void 0" data-seq="${hit.seq}"`
+         + ` data-title="${title}" data-sub="${sub}">【${raw}】</a>`;
+  };
   return esc(s)
     .replace(/^#{1,4}\s*(.+)$/gm, '<strong class="h">$1</strong>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/^\s*[-*]\s+(?=\S)/gm, '· ')
-    .replace(/【未核实：[^】]{1,80}】/g, m => `<span class="cite bad">${m}</span>`)
-    .replace(/【[^】]{1,40}】/g, m => `<span class="cite">${m}</span>`)
+    .replace(/【([^】]{1,80})】/g, (m, inner) =>
+      inner.startsWith('未核实：') ? `<span class="cite bad">${m}</span>` : link(inner))
     .replace(/「[^」]{1,120}」/g, m => `<span style="color:var(--fg)">${m}</span>`);
 }
 
@@ -358,6 +371,9 @@ function addTurn(question){
 
 function render(turn, d){
   const allCites = d.citations||[];
+  // 正文里的【分类／章节／关卡】与下方出处是同一批，用标签建索引让正文也能点
+  const labelMap = {};
+  allCites.forEach(c => { if(c.label && c.seq) labelMap[c.label] = c; });
   const citeCard = c => c.seq
     ? `<a class="src" href="javascript:void 0" data-seq="${c.seq}"
           data-title="${esc(c.title||'')}" data-sub="${esc((c.category||'')+'／'+(c.chapter||''))}">
@@ -388,7 +404,8 @@ function render(turn, d){
   let answerHtml;
   if(ANSWER_MODES.includes(d.mode) && d.answer){
     // 段落之间是空行；段内的单换行是模型列的清单，必须保留换行，否则 1/2/3 会挤成一段
-    answerHtml = d.answer.split(/\n{2,}/).map(p => `<p>${rich(p).replace(/\n/g,'<br>')}</p>`).join('');
+    answerHtml = d.answer.split(/\n{2,}/)
+      .map(p => `<p>${rich(p, labelMap).replace(/\n/g,'<br>')}</p>`).join('');
   } else if(d.mode === 'evidence'){
     answerHtml = `<p>当前没有配置模型密钥，因此只给出检索到的原文与出处。</p>
       <p class="lead">把 key 写进 <code>config.json</code> 的 <code>api_key</code>，重启服务即可得到成句回答。</p>`;
