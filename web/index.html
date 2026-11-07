@@ -168,6 +168,7 @@
   <a class="stat" id="wiki-link" target="_blank" rel="noreferrer"
      href="https://wiki.biligame.com/zspms/%E5%89%A7%E6%83%85%E5%9B%9E%E9%A1%BE"
      title="语料来源：战双 BWIKI 剧情回顾">wiki 源 ↗</a>
+  <button class="upd" id="keyBtn" title="填写 / 更换 DeepSeek API Key">设置密钥</button>
   <button class="upd" id="updBtn" title="检查 wiki 是否有新内容；更新会抓取并重建索引。不要频繁点击，会触发站点限流。">更新语料</button>
   <a class="stat" id="export" href="/api/history/export"
      style="color:var(--fg-dim);text-decoration:none;border-bottom:1px dotted var(--line)">导出历史</a>
@@ -177,6 +178,32 @@
 <main id="main"><div class="wrap" id="list">
   <div class="empty">问一句剧情，答案带出处。<br>例：露西亚第一次登场是在哪里？第12章讲了什么？</div>
 </div></main>
+
+<div class="viewer" id="keydlg" hidden>
+  <div class="viewer-backdrop" data-keyclose="1"></div>
+  <div class="viewer-panel" role="dialog" aria-modal="true" style="width:min(520px,calc(100vw - 48px))">
+    <div class="viewer-head">
+      <div>
+        <div class="viewer-title">设置 API Key</div>
+        <div class="viewer-sub" id="keySub">读取中…</div>
+      </div>
+      <button class="viewer-close" data-keyclose="1">关闭 Esc</button>
+    </div>
+    <div class="viewer-body" style="white-space:normal">
+      <input id="keyInput" type="password" autocomplete="off" spellcheck="false"
+             placeholder="sk-...（粘贴后点保存）"
+             style="width:100%;box-sizing:border-box;background:var(--panel-2);color:var(--fg);
+                    border:1px solid var(--line);border-radius:6px;padding:10px 12px;font:inherit;outline:none">
+      <div class="meta" style="margin-top:12px">
+        <span>只写入本机 <code>config.json</code>，不会上传；格式不对会当场拒绝。</span>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button class="upd" id="keySave" style="margin-left:0;height:32px;padding:0 16px">保存并测试</button>
+      </div>
+      <div class="meta" id="keyMsg" style="margin-top:12px"></div>
+    </div>
+  </div>
+</div>
 
 <div class="viewer" id="viewer" hidden>
   <div class="viewer-backdrop" data-close="1"></div>
@@ -318,6 +345,74 @@ async function loadHistory(){
     showHistStatus('历史载入失败：' + String(e && e.message || e));
   }
 }
+
+// ---------- 设置密钥 ----------
+const keyDlg = document.getElementById('keydlg');
+const keySub = document.getElementById('keySub');
+const keyInput = document.getElementById('keyInput');
+const keyMsg = document.getElementById('keyMsg');
+const keySave = document.getElementById('keySave');
+const keyBtn = document.getElementById('keyBtn');
+
+function keySay(text, cls){
+  keyMsg.innerHTML = cls ? `<span class="${cls}">${esc(text)}</span>` : esc(text);
+}
+
+async function openKeyDialog(){
+  keyDlg.hidden = false;
+  document.body.style.overflow = 'hidden';
+  keyInput.value = '';
+  keyMsg.textContent = '';
+  keySub.textContent = '读取当前配置…';
+  try{
+    const c = await (await fetch('/api/config', {cache:'no-store'})).json();
+    keySub.textContent = c.has_key
+      ? `当前：${c.mask}（${c.key_len} 位）· 模型 ${c.model}`
+      : `当前未配置密钥（证据模式）${c.hint ? ' · ' + c.hint : ''}`;
+  }catch(e){
+    keySub.textContent = '读取配置失败：' + (e && e.message || e);
+  }
+  keyInput.focus();
+}
+
+function closeKeyDialog(){
+  keyDlg.hidden = true;
+  document.body.style.overflow = '';
+}
+
+async function saveKey(){
+  const v = keyInput.value.trim();
+  if(!v){ keySay('请先粘贴密钥', 'err'); return; }
+  keySave.disabled = true;
+  keySay('正在写入并测试连通性…');
+  try{
+    const r = await fetch('/api/config/key', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({api_key: v})
+    });
+    const d = await r.json();
+    if(d.ok){
+      keySay(`${d.message}（实际模型：${d.model}）`);
+      keyInput.value = '';
+      health();          // 刷新右上角模型徽标
+      setTimeout(() => { closeKeyDialog(); }, 1200);
+    }else{
+      keySay(d.message || '保存失败', 'err');
+    }
+  }catch(e){
+    keySay('请求失败：' + (e && e.message || e), 'err');
+  }finally{
+    keySave.disabled = false;
+  }
+}
+
+keyBtn.addEventListener('click', openKeyDialog);
+keySave.addEventListener('click', saveKey);
+keyInput.addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); saveKey(); } });
+keyDlg.addEventListener('click', e => { if(e.target.closest('[data-keyclose]')) closeKeyDialog(); });
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape' && !keyDlg.hidden) closeKeyDialog();
+});
 
 // ---------- 更新语料 ----------
 const updBtn = document.getElementById('updBtn');
@@ -624,6 +719,17 @@ q.addEventListener('input', () => {
   // border-box：scrollHeight 不含 border，直接赋值会让内容溢出 2px，出现滚动条
   q.style.height = Math.min(q.scrollHeight + 2, 160) + 'px';
 });
+// 让后端知道页面还在；页面全部关闭后服务会自动退出
+(() => {
+  function connect(){
+    try{
+      const es = new EventSource('/api/events');
+      es.onerror = () => { es.close(); setTimeout(connect, 3000); };
+    }catch(e){}
+  }
+  connect();
+})();
+
 health();
 loadHistory();
 q.focus();

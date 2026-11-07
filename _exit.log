@@ -1,0 +1,7 @@
+战双剧情问答  ->  http://127.0.0.1:8712/
+  config : D:\Coding\MyGitHub\PGR-Story-QA\config.json  (exists=True)
+  llm    : key from config.json, len=35, model=deepseek-chat
+  exit   : 页面全关后自动退出
+  127.0.0.1 "GET /api/health HTTP/1.1" 200 -
+  127.0.0.1 "GET /api/events HTTP/1.1" 200 -
+  127.0.0.1 "GET /api/health HTTP/1.1" 200 -

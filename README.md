@@ -33,7 +33,13 @@ python app.py                     :: 启动，自动打开浏览器
 
 ### 配置密钥
 
-没有密钥也能用（证据模式：只给原文与出处，不生成成句回答）。要生成回答，把 `config.example.json` 复制成 `config.json` 并填入：
+**页面里点「设置密钥」**：粘贴后点「保存并测试」——
+
+- 先校验格式（`sk-` 开头、35 位、不是 UUID），格式不对当场拒绝；
+- **再用这把 key 真调一次模型，通过了才写入** `config.json`，失败不会覆盖原有配置；
+- 结果与错误都显示在弹窗里，同时写进 `logs/app.log`（只记长度与打码后的值）。
+
+也可以手工配置：没有密钥也能用（证据模式：只给原文与出处，不生成成句回答）。把 `config.example.json` 复制成 `config.json` 并填入：
 
 ```json
 { "api_key": "sk-...", "base": "https://api.deepseek.com", "model": "deepseek-flash", "timeout": 90 }
@@ -49,15 +55,18 @@ python scripts\set_key.py
 
 ## 停止
 
-- 关闭命令行窗口，或在启动它的终端里按 `Ctrl+C`。
-- 双击 `.bat` 启动时没有控制台窗口，用任务管理器结束 `pythonw.exe`，或关闭页面后重启电脑前不必处理——服务只绑定 `127.0.0.1`。
+**关掉页面就够了。** 前端用一条 SSE 连接表明"页面还开着"，最后一个页面关闭后约 3 秒服务自动退出，不会静默常驻。
+
+- 刷新页面有 3 秒宽限，不会误退。
+- 需要常驻（比如挂着调试）时加 `--keep-alive`。
+- 也可以在启动它的终端里按 `Ctrl+C`。
 
 ## 快捷方式与开始菜单
 
 `.bat` 本身不能保存自定义图标，图标要设置在快捷方式上。
 
 1. 右键 `启动剧情问答.bat` →（Windows 11 先点「显示更多选项」）→「发送到」→「桌面快捷方式」。
-2. 桌面右键该快捷方式 →「属性」→「更改图标」→「浏览」，选择项目里的 `PGR_icon.ico` →「确定」→「应用」。
+2. 桌面右键该快捷方式 →「属性」→「更改图标」→「浏览」，选择项目里的 `PGR-QA.ico` →「确定」→「应用」。
 3. 想固定在开始屏幕：把快捷方式复制到 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\`，再到「开始」→「所有应用」里右键固定。
 
 快捷方式的目标是 `.bat`，工作目录不用填——`.bat` 自己会 `cd /d "%~dp0"`。
@@ -136,8 +145,9 @@ PGR-Story-QA/
   pgr/                      语料管道 + 检索 + 服务
   scripts/                  bootstrap / 自检 / 评测
   启动剧情问答.bat            无控制台启动
-  PGR_icon.ico              快捷方式图标
-  PGR_icon.png              图标预览
+  PGR-QA.ico                快捷方式图标
+  PGR-QA.png                图标预览
+  logs/app.log              运行日志（1 MB 轮转，自动创建）
   config.example.json       配置样例
   CLEANING.md               清洗规则（新增内容按此复用）
   README.md

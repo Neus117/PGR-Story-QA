@@ -18,7 +18,8 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-from . import agent, llm, pricing, update as update_mod, websearch
+from . import agent, config_api, llm, pricing, update as update_mod, websearch
+from .logfile import get as _log
 from .history import History as _History
 from .search import Searcher, SUMMARY_INTENT
 
@@ -37,6 +38,11 @@ DEFAULT_PORT = 8712
 _lock = threading.Lock()
 UPDATE_LOCK = threading.Lock()
 UPDATE_STATE = {"state": "idle", "message": "", "progress": "", "result": None}
+
+# 页面存活检测：浏览器用 SSE 维持一条连接，全部断开后自动退出
+SSE_LOCK = threading.Lock()
+SSE_CLIENTS = 0
+STOPPING = threading.Event()
 _CITE_BOX = None
 _CITE_INDEX = None          # (by_title, by_bare_chapter) 一次性索引
 _CITE_LOCK = threading.Lock()
@@ -188,6 +194,32 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(f"  {self.address_string()} {fmt % args}", flush=True)
 
+    def _serve_events(self):
+        """SSE 心跳：一条连接代表一个打开的页面。"""
+        global SSE_CLIENTS
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-store")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        with SSE_LOCK:
+            SSE_CLIENTS += 1
+            n = SSE_CLIENTS
+        _log().info("页面连接建立，当前页面数=%d", n)
+        try:
+            while not STOPPING.is_set():
+                self.wfile.write(b": ping\n\n")
+                self.wfile.flush()
+                time.sleep(5)
+        except Exception:
+            pass
+        finally:
+            with SSE_LOCK:
+                SSE_CLIENTS -= 1
+                n = SSE_CLIENTS
+            _log().info("页面连接断开，当前页面数=%d", n)
+
     def _start_update(self):
         """后台跑更新，前端轮询 /api/update/status。"""
         if UPDATE_STATE["state"] == "running":
@@ -272,6 +304,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             # 任何未捕获异常都必须回一个响应：直接断连接会让浏览器只看到 "Failed to fetch"
             traceback.print_exc()
+            _log().error("未处理异常 %s: %s", type(e).__name__, e)
             try:
                 return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
             except Exception:
@@ -299,6 +332,12 @@ class Handler(BaseHTTPRequestHandler):
                                "chapter": row["chapter"], "category": row["category"],
                                "stage_no": row["stage_no"], "chars": row["nchars"],
                                "text": row["txt"] or ""})
+        if path == "/api/events":
+            return self._serve_events()
+        if path == "/api/config":
+            return self._json(config_api.current())
+        if path == "/api/config/test":
+            return self._json(config_api.test())
         if path == "/api/update/status":
             return self._json({"state": UPDATE_STATE["state"],
                                "message": UPDATE_STATE["message"],
@@ -392,6 +431,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
+        if urlparse(self.path).path == "/api/config/key":
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                data = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+            except Exception as e:
+                return self._json({"ok": False, "message": f"请求体解析失败：{e}"}, 400)
+            res = config_api.save(data.get("api_key", ""), data.get("model", ""), data.get("base", ""))
+            return self._json(res, 200 if res.get("ok") else 400)
         if urlparse(self.path).path == "/api/update/apply":
             return self._start_update()
         if urlparse(self.path).path != "/api/ask":
@@ -561,15 +608,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": str(e)}, 500)
 
 
-def main(port: int | None = None, open_browser: bool = True) -> int:
-    import threading as _th
+def main(port: int | None = None, open_browser: bool = True,
+         keep_alive: bool = False) -> int:
     import webbrowser
     from .paths import DATA
 
+    log = _log()
     port = int(port or DEFAULT_PORT)
     if not (DATA / "pgr.db").exists():
-        print("缺少 data/pgr.db，请先运行:  python scripts/bootstrap.py")
+        msg = "缺少 data/pgr.db，请先运行:  python scripts/bootstrap.py"
+        print(msg)
+        log.error(msg)
         return 1
+
     get_searcher()
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
@@ -583,16 +634,48 @@ def main(port: int | None = None, open_browser: bool = True) -> int:
             print(f"  !! 密钥格式可疑：{diag['format_warning']}")
     else:
         print(f"  llm    : 证据模式 —— {diag['hint']}")
+    print(f"  exit   : {'常驻（--keep-alive）' if keep_alive else '页面全关后自动退出'}")
+    log.info("服务启动 port=%d keep_alive=%s llm=%s", port, keep_alive, diag["ok"])
+
+    # 页面全部关闭后退出：给刷新留 3 秒宽限
+    def watchdog():
+        had_page = False
+        idle_since = None
+        while not STOPPING.is_set():
+            time.sleep(1)
+            with SSE_LOCK:
+                n = SSE_CLIENTS
+            if n > 0:
+                had_page = True
+                idle_since = None
+            elif had_page:
+                idle_since = idle_since or time.time()
+                if time.time() - idle_since >= 3:
+                    log.info("所有页面已关闭，服务退出")
+                    STOPPING.set()
+                    srv.shutdown()
+                    return
+
+    if not keep_alive:
+        threading.Thread(target=watchdog, daemon=True).start()
 
     if open_browser:
-        _th.Timer(0.8, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\nbye")
+    finally:
+        STOPPING.set()
+        log.info("服务停止")
     return 0
 
 
 if __name__ == "__main__":
-    import sys
-    raise SystemExit(main(int(sys.argv[1]) if len(sys.argv) > 1 else None))
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("port", nargs="?", type=int, default=None)
+    ap.add_argument("--keep-alive", action="store_true")
+    ap.add_argument("--no-browser", action="store_true")
+    a = ap.parse_args()
+    raise SystemExit(main(port=a.port, open_browser=not a.no_browser, keep_alive=a.keep_alive))
