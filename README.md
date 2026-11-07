@@ -185,3 +185,5 @@ PGR-Story-QA/
 - **提示缺少 `data/pgr.db`**：先跑 `python scripts\bootstrap.py`。
 - **模型调用失败**：`python scripts\test_llm.py` 会打印配置路径、密钥来源、实际 base 与 HTTP 返回。
 - **双击 `.bat` 没反应**：确认 `pythonw` 在 `PATH` 中，或改用 `python app.py` 看报错。
+- **端口被占用**：如果占用者是**同一份安装**，会直接打开已有页面；如果是**另一个安装**（比如便携版和源码版同时存在），会自
+  动换到下一个端口启动，绝不接管别人的实例——否则你会看到别人的密钥和问答历史。

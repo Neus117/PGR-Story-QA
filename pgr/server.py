@@ -471,7 +471,8 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     _build = ""
                 from . import __version__ as _ver
-                return self._json({"ok": True, "version": _ver,
+                from .paths import ROOT as _ROOT
+                return self._json({"ok": True, "version": _ver, "app_dir": str(_ROOT),
                                    "ready": READY.is_set(),
                                    "pct": BOOT["pct"], "stage": BOOT["text"],
                                    "stages": n, "lines": lines,
@@ -716,14 +717,30 @@ def main(port: int | None = None, open_browser: bool = True,
     if _occupied:
         try:
             import urllib.request as _ur
+            from .paths import ROOT as _ROOT
             with _ur.urlopen(url + "api/health", timeout=1.5) as _r:
                 _j = json.loads(_r.read().decode("utf-8"))
             if _j.get("ok") and "stages" in _j:
-                print(f"已有实例在运行：{url}")
-                log.info("端口 %d 上已有本工具实例，直接打开页面", port)
-                if open_browser:
-                    webbrowser.open(url)
-                return 0
+                same = os.path.normcase(str(_j.get("app_dir", ""))) == os.path.normcase(str(_ROOT))
+                if same:
+                    print(f"已有实例在运行：{url}")
+                    log.info("端口 %d 上已有同一个安装的实例，直接打开页面", port)
+                    if open_browser:
+                        webbrowser.open(url)
+                    return 0
+                # 是别的安装：绝不接管，否则用户会看到别人的密钥与历史
+                log.warning("端口 %d 被另一个安装占用（%s），换端口启动", port, _j.get("app_dir"))
+                print(f"端口 {port} 上是另一个安装的实例（{_j.get('app_dir')}），改用新端口")
+                import socket as _s2
+                for _alt in range(port + 1, port + 30):
+                    _p = _s2.socket()
+                    try:
+                        if _p.connect_ex(("127.0.0.1", _alt)) != 0:
+                            port = _alt
+                            url = f"http://127.0.0.1:{port}/"
+                            break
+                    finally:
+                        _p.close()
         except Exception:
             pass
 

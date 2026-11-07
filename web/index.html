@@ -275,6 +275,8 @@
       <div>
         <div class="viewer-title">设置 API Key</div>
         <div class="viewer-sub" id="keySub">读取中…</div>
+        <div class="viewer-sub" id="keyPath"
+             style="margin-top:2px;font-size:11px;opacity:.72;word-break:break-all"></div>
       </div>
       <button class="viewer-close" data-keyclose="1">关闭 Esc</button>
     </div>
@@ -510,9 +512,13 @@ async function openKeyDialog(){
     const modelText = (c.served_model && c.served_model !== c.model)
       ? `${c.served_model}（配置写的是 ${c.model}）`
       : served;
+    // 密钥来源必须写清楚：同一个端口上可能是另一个安装的实例
+    const src = (c.source && c.source !== '无') ? c.source : '未配置';
     keySub.textContent = c.has_key
-      ? `当前：${c.mask}（${c.key_len} 位）· 模型 ${modelText}`
+      ? `当前：${c.mask}（${c.key_len} 位）· 模型 ${modelText} · 来源 ${src}`
       : `当前未配置密钥（证据模式）${c.hint ? ' · ' + c.hint : ''}`;
+    const pathEl = document.getElementById('keyPath');
+    if(pathEl) pathEl.textContent = c.config_path ? `配置文件：${c.config_path}` : '';
   }catch(e){
     keySub.textContent = '读取配置失败：' + (e && e.message || e);
   }
