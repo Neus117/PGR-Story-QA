@@ -47,6 +47,21 @@ python scripts\set_key.py
 
 `config.json` 已被 `.gitignore` 排除，不会误提交。
 
+## 停止
+
+- 关闭命令行窗口，或在启动它的终端里按 `Ctrl+C`。
+- 双击 `.bat` 启动时没有控制台窗口，用任务管理器结束 `pythonw.exe`，或关闭页面后重启电脑前不必处理——服务只绑定 `127.0.0.1`。
+
+## 快捷方式与开始菜单
+
+`.bat` 本身不能保存自定义图标，图标要设置在快捷方式上。
+
+1. 右键 `启动剧情问答.bat` →（Windows 11 先点「显示更多选项」）→「发送到」→「桌面快捷方式」。
+2. 桌面右键该快捷方式 →「属性」→「更改图标」→「浏览」，选择项目里的 `PGR_icon.ico` →「确定」→「应用」。
+3. 想固定在开始屏幕：把快捷方式复制到 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\`，再到「开始」→「所有应用」里右键固定。
+
+快捷方式的目标是 `.bat`，工作目录不用填——`.bat` 自己会 `cd /d "%~dp0"`。
+
 ## 命令行参数
 
 | 参数 | 默认值 | 说明 |
@@ -104,6 +119,8 @@ PGR-Story-QA/
   pgr/                      语料管道 + 检索 + 服务
   scripts/                  bootstrap / 自检 / 评测
   启动剧情问答.bat            无控制台启动
+  PGR_icon.ico              快捷方式图标
+  PGR_icon.png              图标预览
   config.example.json       配置样例
   CLEANING.md               清洗规则（新增内容按此复用）
   README.md
