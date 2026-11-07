@@ -211,7 +211,7 @@ class Handler(BaseHTTPRequestHandler):
             while not STOPPING.is_set():
                 self.wfile.write(b": ping\n\n")
                 self.wfile.flush()
-                time.sleep(5)
+                time.sleep(2)   # 心跳越密，越早知道页面关了
         except Exception:
             pass
         finally:
@@ -621,9 +621,31 @@ def main(port: int | None = None, open_browser: bool = True,
         log.error(msg)
         return 1
 
-    get_searcher()
-    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
+
+    # 端口上已经有本工具在跑？直接打开它，别再起第二个（Windows 的 SO_REUSEADDR
+    # 允许重复绑定，两个实例会抢同一个端口，请求随机落到其中一个）
+    try:
+        import urllib.request as _ur
+        with _ur.urlopen(url + "api/health", timeout=2) as _r:
+            _j = json.loads(_r.read().decode("utf-8"))
+        if _j.get("ok") and "stages" in _j:
+            print(f"已有实例在运行：{url}")
+            log.info("端口 %d 上已有本工具实例，直接打开页面", port)
+            if open_browser:
+                webbrowser.open(url)
+            return 0
+    except Exception:
+        pass
+
+    try:
+        get_searcher()
+        srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    except OSError as e:
+        msg = f"端口 {port} 被占用且不是本工具（{e}）。换一个端口：python app.py --port 8712"
+        print(msg)
+        log.error(msg)
+        return 1
 
     diag = llm.diagnose()
     print(f"战双剧情问答  ->  {url}")
@@ -637,12 +659,12 @@ def main(port: int | None = None, open_browser: bool = True,
     print(f"  exit   : {'常驻（--keep-alive）' if keep_alive else '页面全关后自动退出'}")
     log.info("服务启动 port=%d keep_alive=%s llm=%s", port, keep_alive, diag["ok"])
 
-    # 页面全部关闭后退出：给刷新留 3 秒宽限
+    # 页面全部关闭后退出：给刷新留 1 秒宽限
     def watchdog():
         had_page = False
         idle_since = None
         while not STOPPING.is_set():
-            time.sleep(1)
+            time.sleep(0.3)     # 轮询间隔要小于宽限，否则宽限会被量化成 1~2 秒
             with SSE_LOCK:
                 n = SSE_CLIENTS
             if n > 0:
@@ -650,7 +672,7 @@ def main(port: int | None = None, open_browser: bool = True,
                 idle_since = None
             elif had_page:
                 idle_since = idle_since or time.time()
-                if time.time() - idle_since >= 3:
+                if time.time() - idle_since >= 1:
                     log.info("所有页面已关闭，服务退出")
                     STOPPING.set()
                     srv.shutdown()
