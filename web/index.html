@@ -76,6 +76,8 @@
   }
   .upd:hover:not(:disabled){color:var(--fg);border-color:var(--fg-faint);background:var(--panel-2)}
   .upd:disabled{opacity:.55;cursor:default}
+  /* 图标按钮没有文字基线，baseline 对齐会偏高；统一按行盒中线对齐 */
+  header .upd,header .badge{align-self:center}
   .upd.icon{width:30px;padding:0;display:inline-flex;align-items:center;justify-content:center}
   /* 按钮组整体右对齐：锚点放在组内第一个元素 */
   #export{margin-left:auto}
