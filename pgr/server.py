@@ -335,7 +335,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/events":
             return self._serve_events()
         if path == "/api/config":
-            return self._json(config_api.current())
+            d = config_api.current()
+            # 配置里写的是请求名（deepseek-chat），实际服务的是回包里的 model
+            d["served_model"] = SERVED_MODEL
+            return self._json(d)
         if path == "/api/config/test":
             return self._json(config_api.test())
         if path == "/api/update/status":

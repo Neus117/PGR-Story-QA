@@ -27,9 +27,10 @@
     display:flex;flex-direction:column;
   }
   header{
-    display:flex;align-items:baseline;gap:12px;
+    display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;row-gap:8px;
     padding:16px 24px;border-bottom:1px solid var(--line);background:var(--panel);
   }
+  header h1,header .upd,header .stat{white-space:nowrap}
   header h1{font-size:16px;font-weight:600;margin:0;letter-spacing:.02em}
   .stat{font-size:12px;color:var(--fg-faint)}
   .upd{
@@ -168,10 +169,11 @@
   <a class="stat" id="wiki-link" target="_blank" rel="noreferrer"
      href="https://wiki.biligame.com/zspms/%E5%89%A7%E6%83%85%E5%9B%9E%E9%A1%BE"
      title="语料来源：战双 BWIKI 剧情回顾">wiki 源 ↗</a>
-  <button class="upd" id="keyBtn" title="填写 / 更换 DeepSeek API Key">设置密钥</button>
   <button class="upd" id="updBtn" title="检查 wiki 是否有新内容；更新会抓取并重建索引。不要频繁点击，会触发站点限流。">更新语料</button>
   <a class="stat" id="export" href="/api/history/export"
      style="color:var(--fg-dim);text-decoration:none;border-bottom:1px dotted var(--line)">导出历史</a>
+  <button class="upd" id="keyBtn" style="margin-left:8px"
+          title="填写 / 更换 DeepSeek API Key">设置密钥</button>
   <span class="badge" id="mode">…</span>
 </header>
 
@@ -366,8 +368,12 @@ async function openKeyDialog(){
   keySub.textContent = '读取当前配置…';
   try{
     const c = await (await fetch('/api/config', {cache:'no-store'})).json();
+    const served = c.served_model || c.model;
+    const modelText = (c.served_model && c.served_model !== c.model)
+      ? `${c.served_model}（配置写的是 ${c.model}）`
+      : served;
     keySub.textContent = c.has_key
-      ? `当前：${c.mask}（${c.key_len} 位）· 模型 ${c.model}`
+      ? `当前：${c.mask}（${c.key_len} 位）· 模型 ${modelText}`
       : `当前未配置密钥（证据模式）${c.hint ? ' · ' + c.hint : ''}`;
   }catch(e){
     keySub.textContent = '读取配置失败：' + (e && e.message || e);
