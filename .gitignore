@@ -15,3 +15,4 @@ __pycache__/
 *.lnk
 Thumbs.db
 .DS_Store
+eval_result.json
