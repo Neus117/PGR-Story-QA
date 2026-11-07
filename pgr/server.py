@@ -193,6 +193,14 @@ class Handler(BaseHTTPRequestHandler):
         if UPDATE_STATE["state"] == "running":
             return self._json({"ok": False, "error": "running",
                                "message": "已经在更新中，请等这次结束"}, 409)
+        # 触发间隔：哪怕只是"检查"也会打两次请求，连续点会触发站点限流
+        st = update_mod.load_state()
+        wait = update_mod.ATTEMPT_COOLDOWN - (time.time() - float(st.get("last_attempt") or 0))
+        if wait > 0:
+            return self._json({"ok": False, "error": "cooldown",
+                               "message": f"刚检查过，请等 {int(wait)} 秒再试（频繁触发会触发站点限流）"}, 429)
+        st["last_attempt"] = time.time()
+        update_mod.save_state(st)
         if not UPDATE_LOCK.acquire(blocking=False):
             return self._json({"ok": False, "error": "busy", "message": "更新任务正忙"}, 409)
         UPDATE_STATE.update({"state": "running", "message": "", "progress": "准备中", "result": None})

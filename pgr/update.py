@@ -24,6 +24,7 @@ STAGES = DATA / "stages.json"
 DB = DATA / "pgr.db"
 
 CHECK_COOLDOWN = 30          # 秒：两次检查之间
+ATTEMPT_COOLDOWN = 60        # 秒：两次「点更新」之间（哪怕只是检查）
 APPLY_COOLDOWN = 600         # 秒：两次更新之间（防频繁触发站点限流）
 EXPORT_BATCH = 50
 NS = "{http://www.mediawiki.org/xml/export-0.11/}"
@@ -47,6 +48,7 @@ def load_state() -> dict:
         "checked_at": None,
         "last_check_request": 0.0,
         "last_apply_request": 0.0,
+        "last_attempt": 0.0,
         "pages": 0,
         "last_result": "",
     }
