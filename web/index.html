@@ -143,6 +143,7 @@
   button:hover:not(:disabled){background:rgba(216,179,106,.2)}
   button:disabled{opacity:.45;cursor:default}
   .hint{max-width:820px;margin:8px auto 0;font-size:12px;color:var(--fg-faint)}
+  .kbd{margin-left:12px;color:var(--fg-faint);opacity:.75}
   .err{color:var(--warn);font-size:13px}
   .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--fg-faint);
         border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
@@ -180,13 +181,14 @@
 
 <footer>
   <div class="inputbar">
-    <textarea id="q" rows="1" placeholder="问点什么…（Enter 发送，Ctrl+Enter 换行）"></textarea>
+    <textarea id="q" rows="1" placeholder="问点什么…"></textarea>
     <button id="send">提问</button>
   </div>
   <div class="hint" id="opts">
     <label style="cursor:pointer;user-select:none">
       <input type="checkbox" id="web" checked style="vertical-align:-1px"> 联网补充
       <span style="color:var(--fg-faint)">（BWIKI / 哔哩哔哩 / 玩家社区；结果标为外部资料，不当作台词）</span>
+      <span class="kbd">Enter 发送 · Ctrl+Enter 换行</span>
     </label>
   </div>
   <div class="hint" id="hint"></div>
@@ -517,12 +519,22 @@ async function ask(){
 send.addEventListener('click', ask);
 q.addEventListener('keydown', e => {
   if(e.key !== 'Enter') return;
-  // Enter 发送；Ctrl+Enter / Shift+Enter 换行（浏览器默认行为，不拦）
-  if(e.ctrlKey || e.metaKey || e.shiftKey) return;
+  // Ctrl+Enter / Shift+Enter 换行：自己插，不依赖浏览器默认行为
+  if(e.ctrlKey || e.metaKey || e.shiftKey){
+    e.preventDefault();
+    const at = q.selectionStart ?? q.value.length;
+    const end = q.selectionEnd ?? at;
+    q.value = q.value.slice(0, at) + '\n' + q.value.slice(end);
+    q.selectionStart = q.selectionEnd = at + 1;
+    q.dispatchEvent(new Event('input'));
+    return;
+  }
   e.preventDefault(); ask();
 });
 q.addEventListener('input', () => {
-  q.style.height='auto'; q.style.height = Math.min(q.scrollHeight, 160) + 'px';
+  q.style.height = 'auto';
+  // border-box：scrollHeight 不含 border，直接赋值会让内容溢出 2px，出现滚动条
+  q.style.height = Math.min(q.scrollHeight + 2, 160) + 'px';
 });
 health();
 loadHistory();
