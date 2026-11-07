@@ -189,6 +189,12 @@ def eval_inline(name: str, params: list[str], audit: Counter) -> str:
         vals = [x for x in p if x and "=" not in x]
         return max(vals, key=len) if vals else ""
 
+    # MediaWiki 转义：{{=}} 是字面等号，{{!}} 是字面竖线。
+    # 不还原等号会让 <div class{{=}}"x"> 变成不完整的标签，逃过 TAG_RE 直接漏进正文。
+    if name == "=":
+        return "="
+    if name == "!":
+        return "|"
     if name in COLOR_WRAPPERS:
         return p[-1] if p else ""
     if name in ("黑幕", "特效字", "修正", "剧情/居右", "居右"):
@@ -234,6 +240,34 @@ BLOCK_WRAPPERS = {"灰色", "黑幕", "引用", "设定", "特效字", "剧情/�
 BLOCK_SKIP = {"剧情/一览", "图片查看按钮", "视频引用", "B站视频", "插入视频", "Swiper",
               "选项卡", "切换显示", "面包屑"}
 BATTLE_KEYS = ("大标题", "提示", "小标题")
+
+
+TAG_FRAGMENT = re.compile(r"</?[a-zA-Z][^<>]{0,300}?[\s=\"/][^<>]{0,300}?>")
+CLOSE_TAG = re.compile(r"</[a-zA-Z][^<>]{0,60}>")
+LEFTOVER_TPL = re.compile(r"\{\{[^{}]{0,200}\}\}|\[\[[^\[\]]{0,200}\]\]")
+
+
+def scrub(text: str, audit: Counter | None = None) -> str:
+    """产出前的最后一道清洗。
+
+    有些路径（包裹块里混了 {{=}} 转义、标签被换行拆开）会绕过 strip_markup，
+    这里统一兜住：去掉标签碎片、残留模板/链接、纯符号行。
+    """
+    if not text:
+        return text
+    before = text
+    text = TAG_FRAGMENT.sub("", text)
+    text = CLOSE_TAG.sub("", text)
+    text = LEFTOVER_TPL.sub("", text)
+    text = re.sub(r"[{}]", "", text)
+    # 只剩标点/等号的碎片行（如被拆开的 = "x"）
+    text = "\n".join(
+        ln for ln in text.split("\n")
+        if not re.fullmatch(r'[\s=/"\'`]+', ln) or not ln.strip()
+    )
+    if audit is not None and text != before:
+        audit["scrub:hit"] += 1
+    return text
 
 
 def parse_blocks(text: str, audit: Counter, depth: int = 0) -> list[dict]:
@@ -582,7 +616,14 @@ def main() -> int:
             if "{{剧情/" in probe_flat or "{{颜色引用" in probe_flat:
                 kept = [b for b in blocks if b["t"] in ("intro", "meta")]
                 blocks = kept + fallback_scan(text, audit)
+            # 兜底清洗放在所有分支之后：fallback 也会产出块，必须一起清
+            for _b in blocks:
+                if "text" in _b:
+                    _b["text"] = scrub(_b["text"], audit)
+                if _b.get("who"):
+                    _b["who"] = scrub(_b["who"], audit)
             flat, nlines = flatten(blocks)
+            flat = scrub(flat, audit)      # 标签可能被拆到两个块里，整段再洗一次
             row = {
                 "title": title,
                 "chapter": meta.get("章节", ""),

@@ -264,10 +264,25 @@ def apply_updates(plan: dict | None = None, progress=None) -> dict:
     except Exception as e:
         return {"ok": False, "error": "index", "message": f"建索引失败：{type(e).__name__}: {e}"}
 
+    # 残留检查：更新最容易引入"wiki 又出了新写法"的问题，必须当场报出来
+    residue = None
+    try:
+        from .markup_check import fatal_total, scan as _scan
+        _r = _scan(DATA / "dialogue.jsonl")
+        residue = fatal_total(_r)
+        if residue:
+            log = __import__("pgr.logfile", fromlist=["get"]).get()
+            log.error("更新后残留检查发现 %d 处源码残留", residue)
+    except Exception as e:
+        residue = -1
+        print(f"  [残留检查] 跳过：{e}")
+
     st = load_state()
     st["last_sync"] = _now().isoformat(timespec="seconds")
     st["pages"] = len(remote)
-    st["last_result"] = f"新增 {len(plan['new'])} / 更新 {len(plan['changed'])} / 删除 {len(plan['deleted'])}"
+    st["last_result"] = (f"新增 {len(plan['new'])} / 更新 {len(plan['changed'])} "
+                         f"/ 删除 {len(plan['deleted'])}"
+                         + (f" / 残留 {residue} 处（见 scripts/check_markup.py）" if residue else ""))
     save_state(st)
 
     return {
@@ -275,6 +290,7 @@ def apply_updates(plan: dict | None = None, progress=None) -> dict:
         "new": len(plan["new"]), "changed": len(plan["changed"]), "deleted": len(plan["deleted"]),
         "downloaded": len(got), "pages": len(remote),
         "elapsed": round(time.time() - t0, 1),
+        "residue": residue,
         "message": st["last_result"],
     }
 
