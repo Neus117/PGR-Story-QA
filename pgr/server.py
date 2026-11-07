@@ -753,6 +753,13 @@ def main(port: int | None = None, open_browser: bool = True,
         log.error(msg)
         return 1
 
+    try:
+        from .logfile import _elapsed_ms as _since_log
+        _ms = int(_since_log())
+    except Exception:
+        _ms = -1
+    log.info("开始监听 port=%d 自日志就绪 %d ms sock=%.3f", port, _ms, time.time())
+
     diag = llm.diagnose()
     print(f"战双剧情问答  ->  {url}")
     print(f"  config : {diag['config_path']}  (exists={diag['exists']})")
@@ -803,8 +810,16 @@ def main(port: int | None = None, open_browser: bool = True,
         log.info("初始化完成")
 
     # 浏览器先弹出来，页面自己显示进度条；不必等后端初始化完
+    def _open_browser():
+        t = time.perf_counter()
+        try:
+            webbrowser.open(url)
+        except Exception as e:
+            log.warning("打开浏览器失败：%s", e)
+        log.info("已请求打开浏览器，耗时 %.0f ms", (time.perf_counter() - t) * 1000)
+
     if open_browser:
-        threading.Timer(0.15, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.15, _open_browser).start()
     threading.Thread(target=init, daemon=True).start()
     try:
         srv.serve_forever()

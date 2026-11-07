@@ -16,6 +16,11 @@ try:                                                         # 打包后要写�
 except Exception:
     pass
 _configured = False
+_T0 = __import__("time").perf_counter()
+
+
+def _elapsed_ms() -> float:
+    return (__import__("time").perf_counter() - _T0) * 1000
 
 
 def setup(level: int = logging.INFO) -> logging.Logger:
@@ -26,13 +31,17 @@ def setup(level: int = logging.INFO) -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(LOG_DIR / "app.log", maxBytes=1024 * 1024,
                                   backupCount=3, encoding="utf-8")
+    # 毫秒精度：启动链路各阶段只差几十毫秒，秒级时间戳量不出来
     handler.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)-7s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+        "%(asctime)s.%(msecs)03d %(levelname)-7s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"))
     log.addHandler(handler)
     log.setLevel(level)
     log.propagate = False
     _configured = True
     log.info("=== 启动 pid=%s cwd=%s ===", os.getpid(), os.getcwd())
+    log.info("日志模块就绪（自导入起 %d ms；解释器与加载器耗时在此前，需外部测量）",
+             int(_elapsed_ms()))
     return log
 
 
