@@ -18,7 +18,7 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-from . import agent, llm, pricing, websearch
+from . import agent, llm, pricing, update as update_mod, websearch
 from .history import History as _History
 from .search import Searcher, SUMMARY_INTENT
 
@@ -35,6 +35,8 @@ def _os_mtime(path: str) -> float:
 DEFAULT_PORT = 8712
 
 _lock = threading.Lock()
+UPDATE_LOCK = threading.Lock()
+UPDATE_STATE = {"state": "idle", "message": "", "progress": "", "result": None}
 _CITE_BOX = None
 _CITE_INDEX = None          # (by_title, by_bare_chapter) 一次性索引
 _CITE_LOCK = threading.Lock()
@@ -142,6 +144,20 @@ TOTALS = {"requests": 0, "tokens": 0, "cost": 0.0}
 HIST = _History()
 
 
+def _close_db_connections() -> None:
+    """重建索引前必须放掉所有句柄，否则 Windows 上 os.replace 会失败。"""
+    global _searcher, _CITE_BOX, _CITE_INDEX
+    for obj in (_searcher, _CITE_BOX):
+        try:
+            if obj is not None:
+                obj.con.close()
+        except Exception:
+            pass
+    _searcher = None
+    _CITE_BOX = None
+    _CITE_INDEX = None
+
+
 def get_searcher() -> Searcher:
     global _searcher
     if _searcher is None:
@@ -171,6 +187,55 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         print(f"  {self.address_string()} {fmt % args}", flush=True)
+
+    def _start_update(self):
+        """后台跑更新，前端轮询 /api/update/status。"""
+        if UPDATE_STATE["state"] == "running":
+            return self._json({"ok": False, "error": "running",
+                               "message": "已经在更新中，请等这次结束"}, 409)
+        if not UPDATE_LOCK.acquire(blocking=False):
+            return self._json({"ok": False, "error": "busy", "message": "更新任务正忙"}, 409)
+        UPDATE_STATE.update({"state": "running", "message": "", "progress": "准备中", "result": None})
+
+        def work():
+            try:
+                def progress(text: str):
+                    UPDATE_STATE["progress"] = text
+
+                plan = update_mod.check_updates(force=True)
+                if not plan.get("ok"):
+                    UPDATE_STATE.update({"state": "error",
+                                         "message": plan.get("message", "检查失败"),
+                                         "progress": ""})
+                    return
+                if not plan.get("has_update"):
+                    UPDATE_STATE.update({
+                        "state": "done", "progress": "",
+                        "message": "wiki 源暂无新内容",
+                        "result": {"no_change": True, "checked_at": plan.get("checked_at"),
+                                   "pages": plan.get("remote_pages")}})
+                    return
+                UPDATE_STATE["progress"] = (
+                    f"发现更新：新增 {len(plan['new'])} / 改动 {len(plan['changed'])} / 删除 {len(plan['deleted'])}")
+                _close_db_connections()          # 先放掉句柄
+                res = update_mod.apply_updates(plan, progress=progress)
+                UPDATE_STATE.update({
+                    "state": "done" if res.get("ok") else "error",
+                    "message": res.get("message", ""),
+                    "progress": "",
+                    "result": res})
+            except Exception as e:
+                traceback.print_exc()
+                UPDATE_STATE.update({"state": "error",
+                                     "message": f"{type(e).__name__}: {e}", "progress": ""})
+            finally:
+                try:
+                    UPDATE_LOCK.release()
+                except Exception:
+                    pass
+
+        threading.Thread(target=work, daemon=True).start()
+        return self._json({"ok": True, "started": True})
 
     def _finish(self, payload: dict, secs: float, code: int = 200, session: str = ""):
         """所有问答都从这里出去，保证一定落盘。"""
@@ -226,6 +291,12 @@ class Handler(BaseHTTPRequestHandler):
                                "chapter": row["chapter"], "category": row["category"],
                                "stage_no": row["stage_no"], "chars": row["nchars"],
                                "text": row["txt"] or ""})
+        if path == "/api/update/status":
+            return self._json({"state": UPDATE_STATE["state"],
+                               "message": UPDATE_STATE["message"],
+                               "progress": UPDATE_STATE["progress"],
+                               "result": UPDATE_STATE["result"],
+                               "wiki": "https://wiki.biligame.com/zspms/%E5%89%A7%E6%83%85%E5%9B%9E%E9%A1%BE"})
         if path == "/api/balance":
             cfg = llm.load_config()
             if not cfg["api_key"]:
@@ -313,11 +384,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
+        if urlparse(self.path).path == "/api/update/apply":
+            return self._start_update()
         if urlparse(self.path).path != "/api/ask":
             return self._json({"error": "not found"}, 404)
         try:
             length = int(self.headers.get("Content-Length") or 0)
             data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+            if UPDATE_STATE["state"] == "running":
+                return self._json({"error": "正在更新语料，请等这次完成再提问"}, 503)
             question = (data.get("question") or "").strip()
             if not question:
                 return self._json({"error": "question 为空"}, 400)

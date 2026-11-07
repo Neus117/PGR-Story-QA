@@ -21,6 +21,7 @@ from .paths import DATA as _DATA
 
 DATA = str(_DATA)
 DB = os.path.join(DATA, "pgr.db")
+BUILD = DB + ".new"          # 先建临时库，成功后再原子替换
 
 
 def main() -> int:
@@ -28,10 +29,10 @@ def main() -> int:
     if not os.path.exists(src):
         print("missing", src)
         return 1
-    if os.path.exists(DB):
-        os.remove(DB)
+    if os.path.exists(BUILD):
+        os.remove(BUILD)
 
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(BUILD)
     con.executescript(
         """
         PRAGMA journal_mode = OFF;
@@ -119,6 +120,8 @@ def main() -> int:
     con.commit()
     print(f"fts built in {time.time()-t0:.1f}s")
     con.close()
+    con.close()
+    os.replace(BUILD, DB)          # 原子替换：失败时旧库仍可用
     print(f"db = {os.path.getsize(DB)/1e6:.1f} MB")
     return 0
 

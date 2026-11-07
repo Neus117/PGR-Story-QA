@@ -32,8 +32,15 @@
   }
   header h1{font-size:16px;font-weight:600;margin:0;letter-spacing:.02em}
   .stat{font-size:12px;color:var(--fg-faint)}
+  .upd{
+    margin-left:auto;height:24px;padding:0 10px;border-radius:var(--r-sm);
+    border:1px solid var(--line);background:transparent;color:var(--fg-dim);
+    font:inherit;font-size:12px;cursor:pointer;transition:color .15s,border-color .15s,background .15s;
+  }
+  .upd:hover:not(:disabled){color:var(--fg);border-color:var(--fg-faint);background:var(--panel-2)}
+  .upd:disabled{opacity:.55;cursor:default}
   .badge{
-    margin-left:auto;font-size:12px;padding:2px 8px;border-radius:var(--r-sm);
+    margin-left:12px;font-size:12px;padding:2px 8px;border-radius:var(--r-sm);
     border:1px solid var(--line);color:var(--fg-dim);
   }
   .badge.on{color:var(--accent);border-color:rgba(216,179,106,.35);background:var(--accent-soft)}
@@ -158,6 +165,10 @@
   <span class="stat" id="stat">读取语料…</span>
   <span class="stat" id="spend"></span>
   <span class="stat" id="build" title="页面构建时间，用来确认浏览器没在跑旧缓存"></span>
+  <a class="stat" id="wiki-link" target="_blank" rel="noreferrer"
+     href="https://wiki.biligame.com/zspms/%E5%89%A7%E6%83%85%E5%9B%9E%E9%A1%BE"
+     title="语料来源：战双 BWIKI 剧情回顾">wiki 源 ↗</a>
+  <button class="upd" id="updBtn" title="检查 wiki 是否有新内容；更新会抓取并重建索引。不要频繁点击，会触发站点限流。">更新语料</button>
   <a class="stat" id="export" href="/api/history/export"
      style="color:var(--fg-dim);text-decoration:none;border-bottom:1px dotted var(--line)">导出历史</a>
   <span class="badge" id="mode">…</span>
@@ -194,6 +205,7 @@
     </label>
   </div>
   <div class="hint" id="hint"></div>
+  <div class="hint" id="updmsg"></div>
 </footer>
 
 <script>
@@ -306,6 +318,65 @@ async function loadHistory(){
     showHistStatus('历史载入失败：' + String(e && e.message || e));
   }
 }
+
+// ---------- 更新语料 ----------
+const updBtn = document.getElementById('updBtn');
+const updMsg = document.getElementById('updmsg');
+
+function sayUpd(text, cls){
+  updMsg.innerHTML = cls ? `<span class="${cls}">${esc(text)}</span>` : esc(text);
+}
+
+async function pollUpdate(){
+  try{
+    const s = await (await fetch('/api/update/status', {cache:'no-store'})).json();
+    if(s.state === 'running'){
+      sayUpd(s.progress || '正在更新…');
+      setTimeout(pollUpdate, 1000);
+      return;
+    }
+    updBtn.disabled = false;
+    updBtn.textContent = '更新语料';
+    if(s.state === 'done'){
+      if(s.result && s.result.no_change){
+        sayUpd(`wiki 源暂无新内容（已核对 ${s.result.pages || '—'} 个关卡 · ${s.result.checked_at || ''}）`);
+      }else{
+        const r = s.result || {};
+        sayUpd(`${s.message || '更新完成'}：新增 ${r.new ?? 0} · 改动 ${r.changed ?? 0} · 删除 ${r.deleted ?? 0}，`
+             + `共 ${r.pages ?? '—'} 关，用时 ${r.elapsed ?? '—'} 秒。刷新页面后生效。`);
+      }
+    }else if(s.state === 'error'){
+      sayUpd(s.message || '更新失败', 'err');
+    }else{
+      sayUpd('');
+    }
+  }catch(e){
+    updBtn.disabled = false;
+    updBtn.textContent = '更新语料';
+    sayUpd('读取更新状态失败：' + (e && e.message || e), 'err');
+  }
+}
+
+updBtn.addEventListener('click', async () => {
+  updBtn.disabled = true;
+  updBtn.textContent = '检查中…';
+  sayUpd('正在检查 wiki 是否有新内容（约 10 秒）…');
+  try{
+    const r = await fetch('/api/update/apply', {method:'POST', cache:'no-store'});
+    const d = await r.json();
+    if(!d.ok){
+      updBtn.disabled = false;
+      updBtn.textContent = '更新语料';
+      sayUpd(d.message || '无法开始更新', 'err');
+      return;
+    }
+    setTimeout(pollUpdate, 800);
+  }catch(e){
+    updBtn.disabled = false;
+    updBtn.textContent = '更新语料';
+    sayUpd('请求失败：' + (e && e.message || e), 'err');
+  }
+});
 
 async function health(){
   try{
