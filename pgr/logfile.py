@@ -9,7 +9,12 @@ import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
+LOG_DIR = Path(__file__).resolve().parent.parent / "logs"   # 源码运行时兜底
+try:                                                         # 打包后要写到 exe 旁边
+    from .paths import ROOT as _ROOT
+    LOG_DIR = _ROOT / "logs"
+except Exception:
+    pass
 _configured = False
 
 

@@ -16,3 +16,8 @@ __pycache__/
 Thumbs.db
 .DS_Store
 eval_result.json
+
+# 打包产物（215 MB，发给别人用，不进仓库）
+dist/
+build/
+*.spec

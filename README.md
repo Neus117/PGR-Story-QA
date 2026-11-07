@@ -20,6 +20,24 @@
 
 ## 快速开始
 
+### 便携版（不用装 Python）
+
+下载 `PGR-Story-QA-portable.zip`（约 100 MB），解压后双击 `战双剧情问答.exe`。
+
+- 自带 Python 运行库和**已经建好的剧情库**（3,692 关 / 40 万句），不需要联网抓取
+- 浏览器自动打开；关掉窗口，后台约 1~2 秒后退出
+- 首次要生成回答，点页面右上角「设置密钥」填入 DeepSeek API Key（没有 Key 也能查原文）
+- Windows 可能提示"未签名程序"，右键 exe →「属性」→ 勾「解除锁定」
+
+自己构建便携版：
+
+```bat
+pip install pyinstaller
+python scripts\build_portable.py
+```
+
+产物在 `dist\战双剧情问答\`（约 212 MB），压缩后约 100 MB。
+
 ### 从源码运行
 
 ```bat
