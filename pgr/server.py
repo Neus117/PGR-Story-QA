@@ -150,6 +150,18 @@ TOTALS = {"requests": 0, "tokens": 0, "cost": 0.0}
 HIST = _History()
 
 
+DB_LOCK = threading.RLock()
+
+
+def _one_conn():
+    """每次请求一条独立连接：sqlite 连接不是线程安全的，共享会串结果。"""
+    import sqlite3
+    from .paths import DATA
+    con = sqlite3.connect(str(DATA / "pgr.db"))
+    con.row_factory = sqlite3.Row
+    return con
+
+
 def _close_db_connections() -> None:
     """重建索引前必须放掉所有句柄，否则 Windows 上 os.replace 会失败。"""
     global _searcher, _CITE_BOX, _CITE_INDEX
@@ -285,7 +297,8 @@ class Handler(BaseHTTPRequestHandler):
             payload["model"] = ((payload.get("usage") or {}).get("_model")
                                  or SERVED_MODEL or llm.load_config()["model"])
             payload["citations"] = _enrich_citations(payload.get("citations") or [])
-            payload["history_id"] = HIST.record(payload, secs, session)
+            with DB_LOCK:
+                payload["history_id"] = HIST.record(payload, secs, session)
         except Exception as e:          # 落盘失败不能影响回答
             print(f"  [history] 写入失败: {e}", flush=True)
         return self._json(payload, code)
@@ -325,9 +338,13 @@ class Handler(BaseHTTPRequestHandler):
             if not seq:
                 return self._json({"ok": False, "error": "缺少 seq"}, 400)
             try:
-                row = _cite_box().con.execute(
-                    "SELECT seq, title, chapter, category, stage_no, nchars, txt "
-                    "FROM stages WHERE seq=?", (seq,)).fetchone()
+                con = _one_conn()
+                try:
+                    row = con.execute(
+                        "SELECT seq, title, chapter, category, stage_no, nchars, txt "
+                        "FROM stages WHERE seq=?", (seq,)).fetchone()
+                finally:
+                    con.close()
             except Exception as e:
                 return self._json({"ok": False, "error": str(e)}, 500)
             if not row:
@@ -379,12 +396,16 @@ class Handler(BaseHTTPRequestHandler):
             limit = _int("limit", 20, 1, 200)
             offset = _int("offset", 0, 0, 10 ** 9)
             sess = (qs.get("session") or [""])[0][:64]
-            turns = HIST.recent(limit, offset, sess)
+            with DB_LOCK:
+                turns = HIST.recent(limit, offset, sess)
             for t in turns:
                 t["citations"] = _enrich_citations(t.get("citations") or [])
-            return self._json({"stats": HIST.stats(), "turns": turns})
+            with DB_LOCK:
+                stats = HIST.stats()
+            return self._json({"stats": stats, "turns": turns})
         if path == "/api/history/export":
-            text = HIST.export_markdown()
+            with DB_LOCK:
+                text = HIST.export_markdown()
             body = text.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/markdown; charset=utf-8")
@@ -397,8 +418,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/health":
             try:
                 s = get_searcher()
-                n = s.con.execute("SELECT count(*) FROM stages").fetchone()[0]
-                lines = s.con.execute("SELECT count(*) FROM lines").fetchone()[0]
+                with DB_LOCK:
+                    n = s.con.execute("SELECT count(*) FROM stages").fetchone()[0]
+                    lines = s.con.execute("SELECT count(*) FROM lines").fetchone()[0]
                 diag = llm.diagnose()
                 try:
                     import datetime as _dt
