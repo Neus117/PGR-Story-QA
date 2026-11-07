@@ -211,9 +211,20 @@
   }
   button:hover:not(:disabled){background:rgba(var(--accent-rgb),.2)}
   button:disabled{opacity:.45;cursor:default}
-  .hint{max-width:820px;margin:8px auto 0;font-size:12px;color:var(--fg-faint);display:flex;align-items:center;gap:12px}
-  .ver{flex:none;font-size:11px;color:var(--fg-faint);opacity:.65;letter-spacing:.02em;font-variant-numeric:tabular-nums}
+  .hint{max-width:820px;margin:8px auto 0;font-size:12px;color:var(--fg-faint)}
+  .sendwrap{display:flex;flex-direction:column;align-items:center;flex:none;gap:4px}
+  .ver{font-size:11px;line-height:1;color:var(--fg-faint);opacity:.65;letter-spacing:.02em;font-variant-numeric:tabular-nums;text-align:center}
   .kbd{margin-left:12px;color:var(--fg-faint);opacity:.75}
+  .blist{display:flex;flex-direction:column;gap:2px}
+  .bitem{
+    display:flex;justify-content:space-between;gap:12px;align-items:baseline;
+    padding:7px 10px;border-radius:6px;cursor:pointer;color:var(--fg-dim);
+    border:1px solid transparent;background:none;font:inherit;text-align:left;width:100%;
+  }
+  .bitem:hover{background:var(--accent-soft);border-color:rgba(var(--accent-rgb),.3);color:var(--fg)}
+  .bitem b{font-weight:400;color:var(--fg)}
+  .bitem span{flex:none;font-size:12px;color:var(--fg-faint)}
+  .bempty{padding:16px 4px;color:var(--fg-faint);font-size:13px}
   .err{color:var(--warn);font-size:13px}
   .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--fg-faint);
         border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
@@ -237,6 +248,7 @@
   <a class="stat" id="wiki-link" target="_blank" rel="noreferrer"
      href="https://wiki.biligame.com/zspms/%E5%89%A7%E6%83%85%E5%9B%9E%E9%A1%BE"
      title="语料来源：战双 BWIKI 剧情回顾">wiki 源 ↗</a>
+  <button class="upd" id="browseBtn" title="按章节或关键词浏览剧情原文">原文</button>
   <a class="stat" id="export" href="/api/history/export"
      style="color:var(--fg-dim);text-decoration:none;border-bottom:1px dotted var(--line)">导出历史</a>
   <button class="upd icon" id="themeBtn" title="切换深色 / 浅色" aria-label="切换深色 / 浅色"></button>
@@ -276,6 +288,25 @@
   </div>
 </div>
 
+<div class="viewer" id="browse" hidden>
+  <div class="viewer-backdrop" data-browseclose="1"></div>
+  <div class="viewer-panel" role="dialog" aria-modal="true" style="width:min(640px,calc(100vw - 48px))">
+    <div class="viewer-head">
+      <div>
+        <div class="viewer-title">浏览原文</div>
+        <div class="viewer-sub" id="browseSub">按章节点开，或直接搜关卡名</div>
+      </div>
+      <button class="viewer-close" data-browseclose="1">关闭 Esc</button>
+    </div>
+    <div class="viewer-body" style="white-space:normal;max-height:58vh">
+      <input id="browseQ" placeholder="搜关卡名 / 章节 / 序号，例如「薇拉」「13 终焉福音」"
+             style="width:100%;box-sizing:border-box;background:var(--panel-2);color:var(--fg);
+                    border:1px solid var(--line);border-radius:6px;padding:9px 12px;font:inherit;outline:none">
+      <div id="browseList" style="margin-top:12px"></div>
+    </div>
+  </div>
+</div>
+
 <div class="viewer" id="viewer" hidden>
   <div class="viewer-backdrop" data-close="1"></div>
   <div class="viewer-panel" role="dialog" aria-modal="true" aria-labelledby="viewer-title">
@@ -293,10 +324,12 @@
 <footer>
   <div class="inputbar">
     <textarea id="q" rows="1" placeholder="问点什么…"></textarea>
-    <button id="send">提问</button>
+    <div class="sendwrap">
+      <button id="send">提问</button>
+      <span class="ver" id="ver" title="版本号"></span>
+    </div>
   </div>
   <div class="hint" id="opts">
-    <span class="ver" id="ver" title="版本号"></span>
     <label style="cursor:pointer;user-select:none">
       <input type="checkbox" id="web" checked style="vertical-align:-1px"> 联网补充
       <span style="color:var(--fg-faint)">（BWIKI / 哔哩哔哩 / 玩家社区；结果标为外部资料，不当作台词）</span>
@@ -838,6 +871,82 @@ q.addEventListener('input', () => {
   connect();
 })();
 
+// ---------- 浏览原文 ----------
+const browseDlg = document.getElementById('browse');
+const browseQ = document.getElementById('browseQ');
+const browseList = document.getElementById('browseList');
+const browseSub = document.getElementById('browseSub');
+
+function bItem(label, right, onClick){
+  const b = document.createElement('button');
+  b.className = 'bitem';
+  b.innerHTML = `<b>${esc(label)}</b><span>${esc(right || '')}</span>`;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function bRender(nodes, note){
+  browseList.innerHTML = '';
+  if(note) browseSub.textContent = note;
+  if(!nodes.length){
+    browseList.innerHTML = '<div class="bempty">没找到，换个关键词试试</div>';
+    return;
+  }
+  const box = document.createElement('div');
+  box.className = 'blist';
+  nodes.forEach(n => box.appendChild(n));
+  browseList.appendChild(box);
+}
+
+async function bChapters(){
+  browseQ.value = '';
+  const d = await (await fetch('/api/stages', {cache:'no-store'})).json();
+  bRender((d.chapters || []).map(c =>
+    bItem(c.chapter, c.n + ' 关', () => bChapter(c.chapter))), '按章节——点一章看里面的关卡');
+}
+
+async function bChapter(name){
+  const d = await (await fetch('/api/stages?chapter=' + encodeURIComponent(name), {cache:'no-store'})).json();
+  const back = bItem('← 返回章节列表', '', bChapters);
+  bRender([back, ...(d.items || []).map(it =>
+    bItem(it.title, it.seq || '', () => { closeBrowse(); openStage(it.seq, it.title, (it.category || '')); }))],
+    '章节：' + name);
+}
+
+let bTimer = null;
+function bSearch(q){
+  clearTimeout(bTimer);
+  if(!q.trim()){ bChapters(); return; }
+  bTimer = setTimeout(async () => {
+    const d = await (await fetch('/api/stages?q=' + encodeURIComponent(q), {cache:'no-store'})).json();
+    bRender((d.items || []).map(it =>
+      bItem(it.title, [it.category, it.chapter].filter(Boolean).join('／'),
+        () => { closeBrowse(); openStage(it.seq, it.title, (it.category || '') + '／' + (it.chapter || '')); })),
+      `搜索「${q}」`);
+  }, 200);
+}
+
+function openBrowse(){
+  browseDlg.hidden = false;
+  document.body.style.overflow = 'hidden';
+  browseQ.value = '';
+  browseQ.focus();
+  const c = new URLSearchParams(location.search).get('chapter');
+  if(c){ bChapter(c); } else { bChapters(); }
+}
+
+function closeBrowse(){
+  browseDlg.hidden = true;
+  if(viewer.hidden) document.body.style.overflow = '';
+}
+
+document.getElementById('browseBtn').addEventListener('click', openBrowse);
+browseQ.addEventListener('input', e => bSearch(e.target.value));
+browseDlg.addEventListener('click', e => { if(e.target.closest('[data-browseclose]')) closeBrowse(); });
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape' && !browseDlg.hidden) closeBrowse();
+});
+
 // ---------- 启动进度 ----------
 const bootEl = document.getElementById('boot');
 const bootBar = document.getElementById('bootBar');
@@ -895,6 +1004,8 @@ q.focus();
 // ?stage=序号 直接打开某关原文（分享/核对用）
 // ?key=1 直接打开设置密钥弹窗（便于核对/分享）
 if(new URLSearchParams(location.search).get('key') === '1'){ openKeyDialog(); }
+// ?browse=1 直接打开原文浏览
+if(new URLSearchParams(location.search).get('browse') === '1'){ openBrowse(); }
 
 const _stageParam = new URLSearchParams(location.search).get('stage');
 if(_stageParam){ openStage(_stageParam, '', ''); }

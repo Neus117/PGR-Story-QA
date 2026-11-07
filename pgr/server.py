@@ -340,6 +340,39 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
             return self._file(os.path.join(WEB, "index.html"), "text/html; charset=utf-8")
+        if path == "/api/stages":
+            from urllib.parse import parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            q = (qs.get("q") or [""])[0].strip()
+            chap = (qs.get("chapter") or [""])[0].strip()
+            try:
+                con = _one_conn()
+                try:
+                    if q:
+                        like = f"%{q}%"
+                        rows = con.execute(
+                            "SELECT seq,title,chapter,category FROM stages "
+                            "WHERE title LIKE ? OR chapter LIKE ? OR seq LIKE ? "
+                            "ORDER BY seq LIMIT 60", (like, like, like)).fetchall()
+                        return self._json({"ok": True, "mode": "search",
+                                           "items": [dict(r) for r in rows]})
+                    if chap:
+                        rows = con.execute(
+                            "SELECT seq,title,category FROM stages WHERE chapter=? "
+                            "ORDER BY seq LIMIT 300", (chap,)).fetchall()
+                        return self._json({"ok": True, "mode": "chapter", "chapter": chap,
+                                           "items": [dict(r) for r in rows]})
+                    rows = con.execute(
+                        "SELECT chapter, COUNT(*) n, MIN(seq) s FROM stages "
+                        "WHERE chapter<>'' GROUP BY chapter "
+                        "ORDER BY CASE WHEN MIN(seq)='' THEN 1 ELSE 0 END, MIN(seq)").fetchall()
+                    return self._json({"ok": True, "mode": "chapters",
+                                       "chapters": [{"chapter": r["chapter"], "n": r["n"]}
+                                                    for r in rows]})
+                finally:
+                    con.close()
+            except Exception as e:
+                return self._json({"ok": False, "error": str(e)}, 500)
         if path == "/api/stage":
             from urllib.parse import parse_qs
             qs = parse_qs(urlparse(self.path).query)
