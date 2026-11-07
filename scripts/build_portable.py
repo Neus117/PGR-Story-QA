@@ -74,25 +74,48 @@ def main() -> int:
             print("PyInstaller 失败")
             return rc
 
-    # 铺数据：语料库 + 配置样例 + 说明
+    # 先彻底清掉暂存区里的运行残留：history.db / logs / config.json 都是本机的，
+    # 绝不能进包。只保留 PyInstaller 刚生成的 exe 与 _internal。
+    keep = {APP_DIR / "战双剧情问答.exe", APP_DIR / "_internal"}
+    if APP_DIR.exists():
+        for child in APP_DIR.iterdir():
+            if child in keep:
+                continue
+            shutil.rmtree(child) if child.is_dir() else child.unlink()
+
+    # 白名单式铺数据：只有语料库和关卡清单
     (APP_DIR / "data").mkdir(parents=True, exist_ok=True)
-    for junk in ("logs", "config.json"):      # 别把运行残留和用户的密钥打进包
-        p = APP_DIR / junk
-        if p.exists():
-            shutil.rmtree(p) if p.is_dir() else p.unlink()
     print(f"复制语料库 {db.stat().st_size/1024/1024:.0f} MB ...", flush=True)
     shutil.copy2(db, APP_DIR / "data" / "pgr.db")
-    for extra in ("stages.json",):
-        src = ROOT / "data" / extra
-        if src.exists():
-            shutil.copy2(src, APP_DIR / "data" / extra)
+    stages = ROOT / "data" / "stages.json"
+    if stages.exists():
+        shutil.copy2(stages, APP_DIR / "data" / "stages.json")
     if (ROOT / "config.example.json").exists():
         shutil.copy2(ROOT / "config.example.json", APP_DIR / "config.example.json")
     (APP_DIR / "使用说明.txt").write_text(README_TXT, encoding="utf-8")
 
+    # 出厂校验：发现任何本机数据就失败，别把用户的密钥和历史发出去
+    bad = []
+    allowed_root = {"战双剧情问答.exe", "_internal", "data", "config.example.json", "使用说明.txt"}
+    for child in APP_DIR.iterdir():
+        if child.name not in allowed_root:
+            bad.append(str(child.relative_to(APP_DIR)))
+    allowed_data = {"pgr.db", "stages.json"}
+    data_dir = APP_DIR / "data"
+    if data_dir.exists():
+        for child in data_dir.iterdir():
+            if child.name not in allowed_data:
+                bad.append("data/" + child.name)
+    if bad:
+        print("\n!! 包里混进了不该有的东西，已中止：")
+        for b in bad:
+            print("   ", b)
+        return 2
+
     total = sum(f.stat().st_size for f in APP_DIR.rglob("*") if f.is_file())
     print(f"\n完成：{APP_DIR}")
     print(f"体积：{total/1024/1024:.0f} MB")
+    print("出厂校验：干净（无 config.json / history.db / logs）")
     return 0
 
 

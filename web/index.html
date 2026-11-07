@@ -248,9 +248,9 @@
   <a class="stat" id="wiki-link" target="_blank" rel="noreferrer"
      href="https://wiki.biligame.com/zspms/%E5%89%A7%E6%83%85%E5%9B%9E%E9%A1%BE"
      title="语料来源：战双 BWIKI 剧情回顾">wiki 源 ↗</a>
-  <button class="upd" id="browseBtn" title="按章节或关键词浏览剧情原文">原文</button>
   <a class="stat" id="export" href="/api/history/export"
      style="color:var(--fg-dim);text-decoration:none;border-bottom:1px dotted var(--line)">导出历史</a>
+  <button class="upd" id="browseBtn" title="按章节或关键词浏览剧情原文">原文</button>
   <button class="upd icon" id="themeBtn" title="切换深色 / 浅色" aria-label="切换深色 / 浅色"></button>
   <button class="upd" id="updBtn" title="检查 wiki 是否有新内容；更新会抓取并重建索引。不要频繁点击，会触发站点限流。">更新语料</button>
   <button class="upd" id="keyBtn"
@@ -902,7 +902,7 @@ async function bChapters(){
   browseQ.value = '';
   const d = await (await fetch('/api/stages', {cache:'no-store'})).json();
   bRender((d.chapters || []).map(c =>
-    bItem(c.chapter, c.n + ' 关', () => bChapter(c.chapter))), '按章节——点一章看里面的关卡');
+    bItem(c.chapter, c.n + ' 节', () => bChapter(c.chapter))), '按章节——点一章看里面的剧情');
 }
 
 async function bChapter(name){
