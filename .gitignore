@@ -1,0 +1,17 @@
+# 运行数据（可用 scripts/bootstrap.py 重建）
+data/
+cache/
+
+# 密钥
+config.json
+
+# 运行产物
+_run.log
+_run.log.err
+logs/
+__pycache__/
+*.py[cod]
+.idea/
+*.lnk
+Thumbs.db
+.DS_Store

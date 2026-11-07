@@ -1,0 +1,512 @@
+"""Local web UI for the story QA bot.
+
+  python server.py            -> http://127.0.0.1:8712
+  python server.py 9000       -> custom port
+
+Endpoints
+  GET  /            chat page
+  POST /api/ask     {"question": "..."} -> {answer, mode, citations, excerpts}
+  GET  /api/health  readiness + corpus size + whether an LLM key is configured
+"""
+from __future__ import annotations
+
+import json
+import os
+import threading
+import time
+import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
+
+from . import agent, llm, pricing, websearch
+from .history import History as _History
+from .search import Searcher, SUMMARY_INTENT
+
+STORY_INTENT = __import__('re').compile(r'讲讲|讲一下|说说|故事|历程|经历|生平|人物线|传记|一生')
+BIO_INTENT = __import__('re').compile(r'介绍一下|介绍|是谁|什么来头|认识一下|人物介绍|简介')
+from .paths import ROOT, WEB
+
+WEB = str(WEB)
+
+
+def _os_mtime(path: str) -> float:
+    import os as _o
+    return _o.path.getmtime(path)
+DEFAULT_PORT = 8712
+
+_lock = threading.Lock()
+_CITE_BOX = None
+_CITE_INDEX = None          # (by_title, by_bare_chapter) 一次性索引
+_CITE_LOCK = threading.Lock()
+
+
+def _cite_box():
+    global _CITE_BOX
+    if _CITE_BOX is None:
+        from .tools import Toolbox
+        _CITE_BOX = Toolbox()
+    return _CITE_BOX
+
+
+def _cite_index():
+    """把 3692 个关卡读进内存做索引。
+
+    原来每条出处都跑一次 `SELECT DISTINCT category, chapter FROM stages`，
+    34 条历史 × 若干出处 = 上百次全表扫描，单个请求要 6 秒，浏览器会直接断开。
+    """
+    global _CITE_INDEX
+    if _CITE_INDEX is None:
+        with _CITE_LOCK:
+            if _CITE_INDEX is None:
+                import re as _re
+                box = _cite_box()
+                rows = box.con.execute(
+                    "SELECT title, chapter, category, seq FROM stages").fetchall()
+                by_title = {}
+                by_chapter = {}
+                for r in rows:
+                    by_title.setdefault(r["title"], r)
+                    bare = _re.sub(r"^[0-9A-Za-z]+[\s\-]*", "", r["chapter"] or "").strip()
+                    by_chapter.setdefault(bare, r)
+                _CITE_INDEX = (by_title, by_chapter)
+    return _CITE_INDEX
+
+
+def _enrich_citations(cites: list) -> list:
+    """{"label": "分类／章节／关卡"} -> 带 seq/url 的可点击结构。全程走内存索引。"""
+    if not cites:
+        return []
+    import re as _re
+    by_title, by_chapter = _cite_index()
+    out = []
+    for c in cites:
+        if not isinstance(c, dict):
+            out.append({"label": str(c)})
+            continue
+        if c.get("seq") and c.get("url"):
+            out.append(c)
+            continue
+        label = c.get("label") or ""
+        try:
+            parts = [x.strip() for x in _re.split(r"[／/]", label) if x.strip()]
+            row = None
+            if len(parts) >= 3:
+                row = by_title.get(parts[-1])
+            if row is None and len(parts) >= 2:
+                chap_raw = parts[-2] if len(parts) >= 3 else parts[-1]
+                bare = _re.sub(r"^[0-9A-Za-z]+[\s\-]*", "", chap_raw).strip()
+                row = by_chapter.get(bare)
+        except Exception:
+            row = None
+        if row is None:
+            out.append({"label": label, "unverified": True})
+            continue
+        out.append({
+            "label": f'{row["category"]}／{row["chapter"]}／{row["title"]}',
+            "category": row["category"], "chapter": row["chapter"],
+            "title": row["title"], "seq": row["seq"],
+            "url": "https://wiki.biligame.com/zspms/"
+                   + __import__("urllib.parse", fromlist=["quote"]).quote(row["title"].replace(" ", "_")),
+        })
+    return out
+
+
+_searcher = None
+LAST_ERROR = ""
+_MODEL_FILE = str(__import__("pathlib").Path(__file__).resolve().parent.parent / "data" / "last_model.json")
+
+
+def _load_served() -> str:
+    try:
+        with open(_MODEL_FILE, encoding="utf-8") as f:
+            return (json.load(f) or {}).get("model", "")
+    except Exception:
+        return ""
+
+
+def _save_served(name: str) -> None:
+    try:
+        os.makedirs(os.path.dirname(_MODEL_FILE), exist_ok=True)
+        with open(_MODEL_FILE, "w", encoding="utf-8") as f:
+            json.dump({"model": name}, f)
+    except Exception:
+        pass
+
+
+SERVED_MODEL = _load_served()
+# 进程内累计（重启清零），用于界面上显示"本次运行花了多少"
+TOTALS = {"requests": 0, "tokens": 0, "cost": 0.0}
+HIST = _History()
+
+
+def get_searcher() -> Searcher:
+    global _searcher
+    if _searcher is None:
+        _searcher = Searcher()
+    return _searcher
+
+
+def _account(usage: dict, model: str) -> dict:
+    """记一笔账：本请求的 token/费用 + 进程内累计。"""
+    global SERVED_MODEL
+    if usage.get("_model") and usage["_model"] != SERVED_MODEL:
+        SERVED_MODEL = usage["_model"]
+        _save_served(SERVED_MODEL)
+    u = pricing.normalize(usage)
+    r = pricing.cost_cny(usage, model)
+    TOTALS["requests"] += 1
+    TOTALS["tokens"] += u["total"]
+    TOTALS["cost"] += r["cost"]
+    return {"cost": round(r["cost"], 6), "cn": pricing.fmt_cny(r["cost"]),
+            "band": r["band"], "tier": r["tier"], "usage": u,
+            "detail": {k: round(v, 6) for k, v in r["detail"].items()},
+            "total_cn": pricing.fmt_cny(TOTALS["cost"])}
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "PGRStory/1.0"
+
+    def log_message(self, fmt, *args):
+        print(f"  {self.address_string()} {fmt % args}", flush=True)
+
+    def _finish(self, payload: dict, secs: float, code: int = 200, session: str = ""):
+        """所有问答都从这里出去，保证一定落盘。"""
+        try:
+            payload["citations"] = _enrich_citations(payload.get("citations") or [])
+            payload["history_id"] = HIST.record(payload, secs, session)
+        except Exception as e:          # 落盘失败不能影响回答
+            print(f"  [history] 写入失败: {e}", flush=True)
+        return self._json(payload, code)
+
+    def _json(self, obj, code=200):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        # 接口响应同样不能缓存：否则浏览器会拿旧的空历史反复渲染
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        try:
+            return self._do_get()
+        except Exception as e:
+            # 任何未捕获异常都必须回一个响应：直接断连接会让浏览器只看到 "Failed to fetch"
+            traceback.print_exc()
+            try:
+                return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+            except Exception:
+                pass
+
+    def _do_get(self):
+        path = urlparse(self.path).path
+        if path in ("/", "/index.html"):
+            return self._file(os.path.join(WEB, "index.html"), "text/html; charset=utf-8")
+        if path == "/api/stage":
+            from urllib.parse import parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            seq = (qs.get("seq") or [""])[0].strip()
+            if not seq:
+                return self._json({"ok": False, "error": "缺少 seq"}, 400)
+            try:
+                row = _cite_box().con.execute(
+                    "SELECT seq, title, chapter, category, stage_no, nchars, txt "
+                    "FROM stages WHERE seq=?", (seq,)).fetchone()
+            except Exception as e:
+                return self._json({"ok": False, "error": str(e)}, 500)
+            if not row:
+                return self._json({"ok": False, "error": f"没有序号为 {seq} 的关卡"}, 404)
+            return self._json({"ok": True, "seq": row["seq"], "title": row["title"],
+                               "chapter": row["chapter"], "category": row["category"],
+                               "stage_no": row["stage_no"], "chars": row["nchars"],
+                               "text": row["txt"] or ""})
+        if path == "/api/balance":
+            cfg = llm.load_config()
+            if not cfg["api_key"]:
+                return self._json({"ok": False, "error": "未配置 API Key"})
+            import json as _json
+            import urllib.request as _ur
+            req = _ur.Request(cfg["base"].rstrip("/") + "/user/balance")
+            req.add_header("Authorization", "Bearer " + cfg["api_key"])
+            try:
+                with _ur.urlopen(req, timeout=20) as r:
+                    data = _json.loads(r.read().decode("utf-8"))
+                return self._json({"ok": True, "balance": data})
+            except Exception as e:
+                return self._json({"ok": False, "error": f"{type(e).__name__}: {e}"})
+        if path == "/api/history":
+            from urllib.parse import parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            def _int(name: str, default: int, lo: int, hi: int) -> int:
+                """参数可能是 abс / 负数 / 超长，一律收敛到合法区间，不许抛异常。"""
+                raw = (qs.get(name) or [""])[0]
+                try:
+                    return max(lo, min(hi, int(raw)))
+                except (TypeError, ValueError):
+                    return default
+
+            limit = _int("limit", 20, 1, 200)
+            offset = _int("offset", 0, 0, 10 ** 9)
+            sess = (qs.get("session") or [""])[0][:64]
+            turns = HIST.recent(limit, offset, sess)
+            for t in turns:
+                t["citations"] = _enrich_citations(t.get("citations") or [])
+            return self._json({"stats": HIST.stats(), "turns": turns})
+        if path == "/api/history/export":
+            text = HIST.export_markdown()
+            body = text.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/markdown; charset=utf-8")
+            self.send_header("Content-Disposition",
+                             'attachment; filename="pgr-history.md"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/api/health":
+            try:
+                s = get_searcher()
+                n = s.con.execute("SELECT count(*) FROM stages").fetchone()[0]
+                lines = s.con.execute("SELECT count(*) FROM lines").fetchone()[0]
+                diag = llm.diagnose()
+                try:
+                    import datetime as _dt
+                    _idx = os.path.join(WEB, "index.html")
+                    _build = _dt.datetime.fromtimestamp(_os_mtime(_idx)).strftime("%m-%d %H:%M:%S")
+                except Exception:
+                    _build = ""
+                return self._json({"ok": True, "stages": n, "lines": lines,
+                                   "llm": diag["ok"],
+                                   "model": SERVED_MODEL or (llm.load_config()["model"] if diag["ok"] else ""),
+                                   "requested_model": llm.load_config()["model"] if diag["ok"] else "",
+                                   "mode": "llm" if diag["ok"] else "evidence",
+                                   "diag": diag,
+                                   "build": locals().get("_build", ""),
+                                   "last_error": LAST_ERROR,
+                                   "totals": {"requests": TOTALS["requests"],
+                                              "tokens": TOTALS["tokens"],
+                                              "cost": pricing.fmt_cny(TOTALS["cost"])}})
+            except Exception as e:
+                return self._json({"ok": False, "error": str(e)}, 500)
+        return self._json({"error": "not found"}, 404)
+
+    def _file(self, path, ctype):
+        if not os.path.exists(path):
+            return self._json({"error": "missing " + os.path.basename(path)}, 404)
+        with open(path, "rb") as f:
+            body = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        # 页面改完必须立刻生效：不加这些头，浏览器会拿旧 HTML，
+        # 表现就是"改了半天没变化"，误判成程序坏了。
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        if urlparse(self.path).path != "/api/ask":
+            return self._json({"error": "not found"}, 404)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+            question = (data.get("question") or "").strip()
+            if not question:
+                return self._json({"error": "question 为空"}, 400)
+            # 追问句自身没有内容词，拿上一轮的问题去补检索词
+            _sid = (data.get("session") or "")[:64]
+            history = data.get("history") or []
+            if not isinstance(history, list):
+                history = []
+            hist_text = " ".join((t.get("question") or "") for t in history[-2:])
+
+            # ---- 默认：agent 工具循环（无意图正则、无路由阈值）----
+            if not data.get("legacy"):
+                t0 = time.time()
+                out = agent.run(question, history)
+                t_agent = (time.time() - t0) * 1000
+                cost = _account(out.get("usage", {}), llm.load_config()["model"])
+                cost["cn"] = pricing.fmt_cny(cost["cost"])
+                cost["total_cn"] = pricing.fmt_cny(TOTALS["cost"])
+                return self._finish({
+                    "question": question,
+                    "answer": out.get("answer", ""),
+                    "mode": out.get("mode"),
+                    "note": out.get("note", ""),
+                    "steps": out.get("steps", 0),
+                    "tool_calls": out.get("tool_calls", []),
+                    "search_ms": round(t_agent),
+                    "entities": [], "chapter_hint": "", "intent": "agent",
+                    "chars": 0, "prompt_chars": 0, "batches": 0, "stage_count": 0,
+                    "citations": [], "excerpts": [], "external": [],
+                    "cost": cost,
+                }, (time.time() - t0), session=_sid)
+
+            t0 = time.time()
+            with _lock:
+                searcher = get_searcher()
+                ev = searcher.search(question, history=hist_text)
+            t_search = (time.time() - t0) * 1000
+
+            # 0) 「讲讲某角色的故事」：跨章节聚合，每章挑出场最密的一关
+            # 「介绍一下X」只有在问题是"单纯问这个人是谁"时才走人物简介：
+            # 把名字和口语词剥掉后如果还剩实体内容（如"第一次登场"），说明是个具体问题
+            _residual = question
+            for _e in ev.entities[:1]:
+                _residual = _residual.replace(_e, '')
+            _residual = __import__('re').sub(
+                r'请|给我|帮我|介绍一下|介绍|讲讲|说说|一下|这个人|这个角色|是谁|什么来头|'
+                r'人物介绍|简介|认识|吧|啊|呢|吗|的|？|\?|\s', '', _residual)
+            bio_mode = (bool(ev.entities) and not ev.chapter_hint
+                        and bool(BIO_INTENT.search(question))
+                        and not bool(STORY_INTENT.search(question))
+                        and len(_residual) <= 3)
+            story_mode = (bool(ev.entities) and not ev.chapter_hint
+                          and bool(STORY_INTENT.search(question)))
+            if (story_mode or bio_mode) and searcher.is_character(ev.entities[0]):
+                name = ev.entities[0]
+                stages = searcher.character_stages(name)
+                if len(stages) >= 3:
+                    gen = llm.summarize_character(name, stages,
+                                                  style="bio" if bio_mode else "story")
+                    payload = {
+                        "question": question,
+                        "answer": gen.get("answer", ""),
+                        "mode": gen.get("mode"),
+                        "note": gen.get("note", ""),
+                        "usage": gen.get("usage", {}),
+                        "search_ms": round(t_search),
+                        "entities": ev.entities,
+                        "chapter_hint": "",
+                        "intent": "story",
+                        "subject": name,
+                        "chars": gen.get("chars", 0),
+                        "prompt_chars": 0,
+                        "batches": gen.get("batches", 0),
+                        "stage_count": gen.get("stage_count", len(stages)),
+                        "citations": [{"title": st["title"], "chapter": st["chapter"],
+                                       "category": st["category"], "seq": st["seq"],
+                                       "url": "https://wiki.biligame.com/zspms/"
+                                              + __import__("urllib.parse", fromlist=["quote"]).quote(st["title"].replace(" ", "_")),
+                                       "score": 0} for st in stages],
+                        "excerpts": [],
+                        "external": [],
+                        "cost": _account(gen.get("usage", {}), llm.load_config()["model"]),
+                    }
+                    return self._finish(payload, time.time() - t0, session=_sid)
+
+            # 1) 「简述某一章」需要整章，不是四关 —— 走分段归纳再合并
+            chapter_mode = bool(ev.chapter_hint) and bool(SUMMARY_INTENT.search(question))
+            if chapter_mode:
+                stages = searcher.chapter_stages(ev.chapter_hint)
+                if len(stages) >= 3:
+                    gen = llm.summarize_chapter(question, stages, history)
+                    payload = {
+                        "question": question,
+                        "answer": gen.get("answer", ""),
+                        "mode": gen.get("mode"),
+                        "note": gen.get("note", ""),
+                        "usage": gen.get("usage", {}),
+                        "search_ms": round(t_search),
+                        "entities": ev.entities,
+                        "chapter_hint": ev.chapter_hint,
+                        "intent": ev.intent,
+                        "chars": gen.get("chars", 0),
+                        "prompt_chars": 0,
+                        "batches": gen.get("batches", 0),
+                        "stage_count": gen.get("stage_count", len(stages)),
+                        "citations": [{"title": st["title"], "chapter": st["chapter"],
+                                       "category": st["category"], "seq": st["seq"],
+                                       "url": "https://wiki.biligame.com/zspms/"
+                                              + __import__("urllib.parse", fromlist=["quote"]).quote(st["title"].replace(" ", "_")),
+                                       "score": 0} for st in stages],
+                        "excerpts": [],
+                        "external": [],
+                        "cost": _account(gen.get("usage", {}), llm.load_config()["model"]),
+                    }
+                    return self._finish(payload, time.time() - t0, session=_sid)
+
+            # 2) 本地证据薄弱时才联网，避免每次都打网络
+            external = []
+            want_web = bool(data.get("web", True))
+            weak = (len(ev.excerpts) < 2) or (max((e["score"] for e in ev.excerpts), default=0) < 1.5)
+            if want_web and llm.available() and (weak or ev.entities):
+                # 用最有区分度的名字去搜；没有实体就退回整句
+                term = " ".join(ev.entities[:2]).strip() or question
+                try:
+                    external = websearch.search(term, limit=3)
+                except Exception as e:
+                    print(f"  [websearch failed] {e}", flush=True)
+
+            t_legacy = time.time()
+            gen = llm.answer(question, ev, history, external)
+            global LAST_ERROR
+            LAST_ERROR = gen.get("note", "") if gen.get("mode") == "error" else ""
+            return self._finish({
+                "question": question,
+                "answer": gen.get("answer", ""),
+                "mode": gen.get("mode"),
+                "note": gen.get("note", ""),
+                "prompt_chars": gen.get("prompt_chars", 0),
+                "usage": gen.get("usage", {}),
+                "search_ms": round(t_search),
+                "entities": ev.entities,
+                "chapter_hint": ev.chapter_hint,
+                "intent": ev.intent,
+                "chars": ev.chars,
+                "citations": [
+                    {"title": e["title"], "chapter": e["chapter"], "category": e["category"],
+                     "seq": e["seq"], "url": e["url"], "score": e["score"]}
+                    for e in ev.excerpts
+                ],
+                "excerpts": [{"title": e["title"], "text": e["text"]} for e in ev.excerpts],
+                "external": [{"title": r["title"], "url": r["url"],
+                              "source": r["source"], "snippet": r["snippet"]}
+                             for r in external],
+                "cost": _account(gen.get("usage", {}), llm.load_config()["model"]),
+            }, (time.time() - t_legacy), session=_sid)
+        except Exception as e:
+            traceback.print_exc()
+            return self._json({"error": str(e)}, 500)
+
+
+def main(port: int | None = None, open_browser: bool = True) -> int:
+    import threading as _th
+    import webbrowser
+    from .paths import DATA
+
+    port = int(port or DEFAULT_PORT)
+    if not (DATA / "pgr.db").exists():
+        print("缺少 data/pgr.db，请先运行:  python scripts/bootstrap.py")
+        return 1
+    get_searcher()
+    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    url = f"http://127.0.0.1:{port}/"
+
+    diag = llm.diagnose()
+    print(f"战双剧情问答  ->  {url}")
+    print(f"  config : {diag['config_path']}  (exists={diag['exists']})")
+    if diag["ok"]:
+        print(f"  llm    : key from {diag['source']}, len={diag['key_len']}, model={llm.load_config()['model']}")
+        if diag.get("format_warning"):
+            print(f"  !! 密钥格式可疑：{diag['format_warning']}")
+    else:
+        print(f"  llm    : 证据模式 —— {diag['hint']}")
+
+    if open_browser:
+        _th.Timer(0.8, lambda: webbrowser.open(url)).start()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\nbye")
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    raise SystemExit(main(int(sys.argv[1]) if len(sys.argv) > 1 else None))

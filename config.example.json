@@ -1,0 +1,6 @@
+{
+  "api_key": "",
+  "base": "https://api.deepseek.com",
+  "model": "deepseek-flash",
+  "timeout": 90
+}
