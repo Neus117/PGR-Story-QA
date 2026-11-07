@@ -70,12 +70,17 @@
   header h1{font-size:16px;font-weight:600;margin:0;letter-spacing:.02em}
   .stat{font-size:12px;color:var(--fg-faint)}
   .upd{
-    margin-left:auto;height:24px;padding:0 10px;border-radius:var(--r-sm);
+    height:24px;padding:0 10px;border-radius:var(--r-sm);
     border:1px solid var(--line);background:transparent;color:var(--fg-dim);
     font:inherit;font-size:12px;cursor:pointer;transition:color .15s,border-color .15s,background .15s;
   }
   .upd:hover:not(:disabled){color:var(--fg);border-color:var(--fg-faint);background:var(--panel-2)}
   .upd:disabled{opacity:.55;cursor:default}
+  .upd.icon{width:30px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+  /* 按钮组整体右对齐：锚点放在组内第一个元素 */
+  #export{margin-left:auto}
+  header .upd{margin-left:8px}
+  .upd.icon svg{display:block}
   .badge{
     margin-left:12px;font-size:12px;padding:2px 8px;border-radius:var(--r-sm);
     border:1px solid var(--line);color:var(--fg-dim);
@@ -205,10 +210,10 @@
   <a class="stat" id="wiki-link" target="_blank" rel="noreferrer"
      href="https://wiki.biligame.com/zspms/%E5%89%A7%E6%83%85%E5%9B%9E%E9%A1%BE"
      title="语料来源：战双 BWIKI 剧情回顾">wiki 源 ↗</a>
-  <button class="upd" id="updBtn" title="检查 wiki 是否有新内容；更新会抓取并重建索引。不要频繁点击，会触发站点限流。">更新语料</button>
   <a class="stat" id="export" href="/api/history/export"
      style="color:var(--fg-dim);text-decoration:none;border-bottom:1px dotted var(--line)">导出历史</a>
-  <button class="upd" id="themeBtn" style="margin-left:8px" title="切换深色 / 浅色">浅色</button>
+  <button class="upd icon" id="themeBtn" title="切换深色 / 浅色" aria-label="切换深色 / 浅色"></button>
+  <button class="upd" id="updBtn" title="检查 wiki 是否有新内容；更新会抓取并重建索引。不要频繁点击，会触发站点限流。">更新语料</button>
   <button class="upd" id="keyBtn"
           title="填写 / 更换 DeepSeek API Key">设置密钥</button>
   <span class="badge" id="mode">…</span>
@@ -388,11 +393,24 @@ async function loadHistory(){
 // ---------- 主题 ----------
 const themeBtn = document.getElementById('themeBtn');
 
+// 图标用几何图元画，不用字体字形/emoji
+const ICON_SUN = `<svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
+  <circle cx="12" cy="12" r="4.6" fill="currentColor"/>
+  <g stroke="currentColor" stroke-width="2" stroke-linecap="round">
+    <path d="M12 1.8v2.6M12 19.6v2.6M1.8 12h2.6M19.6 12h2.6"/>
+    <path d="M4.8 4.8l1.9 1.9M17.3 17.3l1.9 1.9M4.8 19.2l1.9-1.9M17.3 6.7l1.9-1.9"/>
+  </g>
+</svg>`;
+const ICON_MOON = `<svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
+  <path d="M20.6 14.8A9 9 0 1 1 9.2 3.4a7 7 0 0 0 11.4 11.4z" fill="currentColor"/>
+</svg>`;
+
 function applyTheme(name){
   document.documentElement.dataset.theme = name;
-  // 按钮显示"切换到哪"，不是"当前是什么"
-  themeBtn.textContent = name === 'light' ? '深色' : '浅色';
-  themeBtn.title = name === 'light' ? '切换到深色' : '切换到浅色';
+  // 深色配月亮、浅色配太阳（图标表示当前主题）
+  const dark = name !== 'light';
+  themeBtn.innerHTML = dark ? ICON_MOON : ICON_SUN;
+  themeBtn.title = dark ? '当前深色，点击切换浅色' : '当前浅色，点击切换深色';
   try { localStorage.setItem('pgr-theme', name); } catch (e) {}
 }
 
