@@ -721,6 +721,8 @@ q.addEventListener('input', () => {
 });
 // 让后端知道页面还在；页面全部关闭后服务会自动退出
 (() => {
+  // ?nosse=1 时不建长连接（headless 截图/调试用）
+  if(new URLSearchParams(location.search).get('nosse') === '1') return;
   function connect(){
     try{
       const es = new EventSource('/api/events');
@@ -735,6 +737,9 @@ loadHistory();
 q.focus();
 
 // ?stage=序号 直接打开某关原文（分享/核对用）
+// ?key=1 直接打开设置密钥弹窗（便于核对/分享）
+if(new URLSearchParams(location.search).get('key') === '1'){ openKeyDialog(); }
+
 const _stageParam = new URLSearchParams(location.search).get('stage');
 if(_stageParam){ openStage(_stageParam, '', ''); }
 
