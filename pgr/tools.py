@@ -202,9 +202,11 @@ class Toolbox:
             if in_ch:
                 r = in_ch[0]
                 return f"{r['category']}／{r['chapter']}／{r['title']}"
+            # 模型常把 "ER12-2滚雪" 写成 "ER12-2 滚雪"，忽略空格再试一次
             other = self.con.execute(
-                "SELECT title, category, chapter, seq FROM stages WHERE title=? OR title LIKE ?",
-                (stage_raw, f"%{bare(stage_raw)}%")).fetchall()
+                "SELECT title, category, chapter, seq FROM stages "
+                "WHERE title=? OR title LIKE ? OR REPLACE(title,' ','')=?",
+                (stage_raw, f"%{bare(stage_raw)}%", (stage_raw or "").replace(" ", ""))).fetchall()
             if len(other) == 1:
                 r = other[0]
                 return f"{r['category']}／{r['chapter']}／{r['title']}"

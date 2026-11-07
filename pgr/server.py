@@ -63,12 +63,14 @@ def _cite_index():
                 rows = box.con.execute(
                     "SELECT title, chapter, category, seq FROM stages").fetchall()
                 by_title = {}
+                by_norm = {}          # 去掉所有空格后的标题，用来容忍多打/少打空格
                 by_chapter = {}
                 for r in rows:
                     by_title.setdefault(r["title"], r)
+                    by_norm.setdefault((r["title"] or "").replace(" ", ""), r)
                     bare = _re.sub(r"^[0-9A-Za-z]+[\s\-]*", "", r["chapter"] or "").strip()
                     by_chapter.setdefault(bare, r)
-                _CITE_INDEX = (by_title, by_chapter)
+                _CITE_INDEX = (by_title, by_chapter, by_norm)
     return _CITE_INDEX
 
 
@@ -77,7 +79,7 @@ def _enrich_citations(cites: list) -> list:
     if not cites:
         return []
     import re as _re
-    by_title, by_chapter = _cite_index()
+    by_title, by_chapter, by_norm = _cite_index()
     out = []
     for c in cites:
         if not isinstance(c, dict):
@@ -91,7 +93,8 @@ def _enrich_citations(cites: list) -> list:
             parts = [x.strip() for x in _re.split(r"[／/]", label) if x.strip()]
             row = None
             if len(parts) >= 3:
-                row = by_title.get(parts[-1])
+                want = parts[-1]
+                row = by_title.get(want) or by_norm.get(want.replace(" ", ""))
             if row is None and len(parts) >= 2:
                 chap_raw = parts[-2] if len(parts) >= 3 else parts[-1]
                 bare = _re.sub(r"^[0-9A-Za-z]+[\s\-]*", "", chap_raw).strip()
