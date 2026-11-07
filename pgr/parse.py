@@ -95,13 +95,69 @@ def find_templates(text: str):
 
 
 LINK_RE = re.compile(r"\[\[([^\[\]|]*)\|([^\[\]]*)\]\]|\[\[([^\[\]]*)\]\]")
+# [[file:xxx.png|class=ing-kk|50px]] / [[文件:...]] —— 整条丢弃
+FILE_LINK_RE = re.compile(r"\[\[\s*(?:file|image|文件|图像)\s*:.*?\]\]", re.I | re.S)
 EXTLINK_RE = re.compile(r"\[(https?://[^\s\]]+)(?:\s+([^\]]*))?\]")
 TAG_RE = re.compile(r"</?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*/?>")
 
 
+def _flatten_tables(s: str) -> str:
+    """把 {| ... |} 维基表格拍成可读文本。
+
+    单元格形如 `|rowspan=2 style="..."|文本`：属性前缀截到第一个 | 为止。
+    同一 `|-` 行内的多个单元格拼成一行，用 ｜ 连接；表格结构与样式全部丢弃。
+    """
+    out: list[str] = []
+    row: list[str] = []
+
+    def flush():
+        if row:
+            out.append(" ｜ ".join(row))
+            row.clear()
+
+    in_table = False
+    for line in s.split("\n"):
+        st = line.strip()
+        if st.startswith("{|"):
+            in_table = True
+            row.clear()
+            continue
+        if in_table and st.startswith("|}"):
+            flush()
+            in_table = False
+            continue
+        if in_table:
+            if st.startswith("|-"):
+                flush()
+                continue
+            if not st:
+                continue
+            if st[0] in "!|":
+                for cell in st[1:].split("||"):
+                    if "|" in cell:
+                        head, _, tail = cell.partition("|")
+                        if "=" in head:           # 属性前缀，丢掉
+                            cell = tail
+                    cell = cell.strip().lstrip("!|").strip()
+                    if cell:
+                        row.append(cell)
+                continue
+            continue
+        out.append(line)
+    flush()
+    return "\n".join(out)
+
+
 def strip_markup(s: str) -> str:
     s = re.sub(r"<!--.*?-->", "", s, flags=re.S)
+    s = _flatten_tables(s)
+    # 图片/文件链接必须整条删掉：它的"显示文字"是 class=/50px 这类参数，
+    # 用普通链接的规则替换会把参数漏进正文。
+    s = FILE_LINK_RE.sub("", s)
+    s = s.replace("[[" + "文件:", "").replace("[[" + "File:", "").replace("[[" + "file:", "")
     s = LINK_RE.sub(lambda m: m.group(2) if m.group(2) is not None else m.group(3), s)
+    # 维基横线 ---- 不是内容
+    s = re.sub(r"^\s*-{4,}\s*$", "", s, flags=re.M)
     s = EXTLINK_RE.sub(lambda m: m.group(2) or m.group(1), s)
     s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
     s = re.sub(r"<hr\s*/?>", "\n", s, flags=re.I)
@@ -111,6 +167,9 @@ def strip_markup(s: str) -> str:
         s = s.replace(a, b)
     s = s.replace("\t", " ")
     s = re.sub(r"[ \u00a0]+", " ", s)
+    # 残留模板（源数据括号错位时会出现）与孤立花括号
+    s = re.sub(r"\{\{[^{}]{0,200}\}\}", "", s)
+    s = re.sub(r"[{}]", "", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
     return "\n".join(line.strip() for line in s.split("\n")).strip()
 
