@@ -65,6 +65,22 @@
     padding:16px 24px;border-bottom:1px solid var(--line);background:var(--panel);
   }
   header h1,header .upd,header .stat{white-space:nowrap}
+
+  /* 启动遮罩：浏览器先弹出来，这里显示进度 */
+  .boot{
+    position:fixed;inset:0;z-index:200;display:none;align-items:center;justify-content:center;
+    background:var(--bg);transition:opacity .3s ease;
+  }
+  .boot.done{opacity:0;pointer-events:none}
+  .boot-inner{width:260px;text-align:center}
+  .boot-title{font-size:15px;color:var(--fg);letter-spacing:.04em;margin-bottom:16px}
+  .boot-bar{height:4px;border-radius:2px;background:var(--panel-2);overflow:hidden}
+  .boot-bar i{
+    display:block;height:100%;width:0;border-radius:2px;background:var(--accent);
+    transition:width .35s ease;
+  }
+  .boot-text{margin-top:12px;font-size:12px;color:var(--fg-faint);min-height:18px}
+  .boot-text.err{color:var(--warn)}
   /* 窄屏先让出构建时间（调试信息），避免模型徽标被挤到第二行 */
   @media (max-width: 1100px){ #build{display:none} }
   header h1{font-size:16px;font-weight:600;margin:0;letter-spacing:.02em}
@@ -204,6 +220,14 @@
 </style>
 </head>
 <body>
+<div class="boot" id="boot">
+  <div class="boot-inner">
+    <div class="boot-title">战双剧情问答</div>
+    <div class="boot-bar"><i id="bootBar"></i></div>
+    <div class="boot-text" id="bootText">正在启动…</div>
+  </div>
+</div>
+
 <header>
   <h1>战双剧情问答</h1>
   <span class="stat" id="stat">读取语料…</span>
@@ -811,8 +835,58 @@ q.addEventListener('input', () => {
   connect();
 })();
 
-health();
-loadHistory();
+// ---------- 启动进度 ----------
+const bootEl = document.getElementById('boot');
+const bootBar = document.getElementById('bootBar');
+const bootText = document.getElementById('bootText');
+
+function setBoot(pct, text, isErr){
+  bootBar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  bootText.textContent = text || '';
+  bootText.classList.toggle('err', !!isErr);
+}
+
+const BOOT_DELAY = 220;   // 快启动时不要闪一下遮罩
+async function waitReady(){
+  const t0 = performance.now();
+  let shown = false;
+  for(;;){
+    try{
+      const r = await fetch('/api/health', {cache:'no-store'});
+      const d = await r.json();
+      setBoot(d.pct ?? 10, d.stage || '加载中…');
+      if(d.ready){
+        setBoot(100, '就绪');
+        break;
+      }
+      if((d.stage || '').startsWith('初始化失败')){
+        bootEl.style.display = 'flex';
+        setBoot(0, d.stage, true);
+        return false;
+      }
+    }catch(e){
+      setBoot(5, '等待服务启动…');
+    }
+    if(!shown && performance.now() - t0 > BOOT_DELAY){
+      bootEl.style.display = 'flex';
+      shown = true;
+    }
+    await new Promise(r => setTimeout(r, 200));
+  }
+  if(!shown){                     // 初始化够快，遮罩没出现过，直接进主界面
+    bootEl.style.display = 'none';
+    return true;
+  }
+  bootEl.classList.add('done');
+  setTimeout(() => { bootEl.style.display = 'none'; }, 320);
+  return true;
+}
+
+waitReady().then(ok => {
+  if(!ok) return;
+  health();
+  loadHistory();
+});
 q.focus();
 
 // ?stage=序号 直接打开某关原文（分享/核对用）

@@ -152,6 +152,15 @@ HIST = _History()
 
 DB_LOCK = threading.RLock()
 
+# 启动就绪状态：0~100，前端据此画进度条
+READY = threading.Event()
+BOOT = {"pct": 0, "text": "启动服务"}
+
+
+def _boot(pct: int, text: str) -> None:
+    BOOT["pct"] = pct
+    BOOT["text"] = text
+
 
 def _one_conn():
     """每次请求一条独立连接：sqlite 连接不是线程安全的，共享会串结果。"""
@@ -428,7 +437,9 @@ class Handler(BaseHTTPRequestHandler):
                     _build = _dt.datetime.fromtimestamp(_os_mtime(_idx)).strftime("%m-%d %H:%M:%S")
                 except Exception:
                     _build = ""
-                return self._json({"ok": True, "stages": n, "lines": lines,
+                return self._json({"ok": True, "ready": READY.is_set(),
+                                   "pct": BOOT["pct"], "stage": BOOT["text"],
+                                   "stages": n, "lines": lines,
                                    "llm": diag["ok"],
                                    "model": SERVED_MODEL or (llm.load_config()["model"] if diag["ok"] else ""),
                                    "requested_model": llm.load_config()["model"] if diag["ok"] else "",
@@ -475,6 +486,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length") or 0)
             data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+            if not READY.is_set():
+                return self._json({"error": "正在加载语料索引，请稍候",
+                                   "starting": True,
+                                   "pct": BOOT["pct"],
+                                   "stage": BOOT["text"]}, 503)
             if UPDATE_STATE["state"] == "running":
                 return self._json({"error": "正在更新语料，请等这次完成再提问"}, 503)
             question = (data.get("question") or "").strip()
@@ -654,21 +670,30 @@ def main(port: int | None = None, open_browser: bool = True,
 
     # 端口上已经有本工具在跑？直接打开它，别再起第二个（Windows 的 SO_REUSEADDR
     # 允许重复绑定，两个实例会抢同一个端口，请求随机落到其中一个）
-    try:
-        import urllib.request as _ur
-        with _ur.urlopen(url + "api/health", timeout=2) as _r:
-            _j = json.loads(_r.read().decode("utf-8"))
-        if _j.get("ok") and "stages" in _j:
-            print(f"已有实例在运行：{url}")
-            log.info("端口 %d 上已有本工具实例，直接打开页面", port)
-            if open_browser:
-                webbrowser.open(url)
-            return 0
-    except Exception:
-        pass
+    # 先用 socket 探端口（毫秒级）。以前直接发 HTTP 请求，端口没人监听时要等满
+    # 2 秒超时才返回，这就是"双击后要等几秒才弹浏览器"的主因。
+    import socket as _socket
+    _probe = _socket.socket()
+    _probe.settimeout(0.2)
+    _occupied = (_probe.connect_ex(("127.0.0.1", port)) == 0)
+    _probe.close()
+
+    if _occupied:
+        try:
+            import urllib.request as _ur
+            with _ur.urlopen(url + "api/health", timeout=1.5) as _r:
+                _j = json.loads(_r.read().decode("utf-8"))
+            if _j.get("ok") and "stages" in _j:
+                print(f"已有实例在运行：{url}")
+                log.info("端口 %d 上已有本工具实例，直接打开页面", port)
+                if open_browser:
+                    webbrowser.open(url)
+                return 0
+        except Exception:
+            pass
 
     try:
-        get_searcher()
+        # 只做 bind+listen（毫秒级），重量级初始化放到后台
         srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     except OSError as e:
         msg = f"端口 {port} 被占用且不是本工具（{e}）。换一个端口：python app.py --port 8712"
@@ -710,8 +735,25 @@ def main(port: int | None = None, open_browser: bool = True,
     if not keep_alive:
         threading.Thread(target=watchdog, daemon=True).start()
 
+    def init():
+        try:
+            _boot(20, "打开语料库")
+            get_searcher()
+            _boot(60, "加载检索索引")
+            _cite_index()
+            _boot(90, "准备就绪")
+        except Exception as e:
+            log.error("初始化失败：%s: %s", type(e).__name__, e)
+            _boot(0, f"初始化失败：{e}")
+            return
+        _boot(100, "就绪")
+        READY.set()
+        log.info("初始化完成")
+
+    # 浏览器先弹出来，页面自己显示进度条；不必等后端初始化完
     if open_browser:
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.15, lambda: webbrowser.open(url)).start()
+    threading.Thread(target=init, daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
