@@ -437,7 +437,9 @@ class Handler(BaseHTTPRequestHandler):
                     _build = _dt.datetime.fromtimestamp(_os_mtime(_idx)).strftime("%m-%d %H:%M:%S")
                 except Exception:
                     _build = ""
-                return self._json({"ok": True, "ready": READY.is_set(),
+                from . import __version__ as _ver
+                return self._json({"ok": True, "version": _ver,
+                                   "ready": READY.is_set(),
                                    "pct": BOOT["pct"], "stage": BOOT["text"],
                                    "stages": n, "lines": lines,
                                    "llm": diag["ok"],

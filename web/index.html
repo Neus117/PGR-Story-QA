@@ -211,7 +211,8 @@
   }
   button:hover:not(:disabled){background:rgba(var(--accent-rgb),.2)}
   button:disabled{opacity:.45;cursor:default}
-  .hint{max-width:820px;margin:8px auto 0;font-size:12px;color:var(--fg-faint)}
+  .hint{max-width:820px;margin:8px auto 0;font-size:12px;color:var(--fg-faint);display:flex;align-items:center;gap:12px}
+  .ver{flex:none;font-size:11px;color:var(--fg-faint);opacity:.65;letter-spacing:.02em;font-variant-numeric:tabular-nums}
   .kbd{margin-left:12px;color:var(--fg-faint);opacity:.75}
   .err{color:var(--warn);font-size:13px}
   .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--fg-faint);
@@ -295,6 +296,7 @@
     <button id="send">提问</button>
   </div>
   <div class="hint" id="opts">
+    <span class="ver" id="ver" title="版本号"></span>
     <label style="cursor:pointer;user-select:none">
       <input type="checkbox" id="web" checked style="vertical-align:-1px"> 联网补充
       <span style="color:var(--fg-faint)">（BWIKI / 哔哩哔哩 / 玩家社区；结果标为外部资料，不当作台词）</span>
@@ -581,6 +583,7 @@ async function health(){
     const r = await fetch('/api/health');
     const d = await r.json();
     if(!d.ok){ document.getElementById('stat').textContent = '索引异常'; return; }
+    if(d.version){ document.getElementById('ver').textContent = 'v' + d.version; }
     document.getElementById('stat').textContent =
       `${d.stages.toLocaleString()} 关卡 · ${d.lines.toLocaleString()} 句台词`;
     if(d.build){ document.getElementById('build').textContent = `构建 ${d.build}`; }
