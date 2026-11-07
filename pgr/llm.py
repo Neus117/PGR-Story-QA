@@ -40,7 +40,7 @@ def key_shape_warning(key: str) -> str:
     return ""
 
 DEFAULT_BASE = "https://api.deepseek.com"
-DEFAULT_MODEL = "deepseek-chat"
+DEFAULT_MODEL = "deepseek-flash"
 # ~6k Chinese chars of overhead is plenty for instructions; evidence is the rest.
 MAX_PROMPT_CHARS = 16000
 MAX_OUTPUT_TOKENS = 900

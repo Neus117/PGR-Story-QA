@@ -95,7 +95,7 @@ if __name__ == "__main__":
     import json
     demo = {"prompt_tokens": 9871, "completion_tokens": 288, "total_tokens": 10159,
             "prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 9871}
-    for m in ("deepseek-flash", "deepseek-chat", "deepseek-v4-pro"):
+    for m in ("deepseek-flash", "deepseek-v4-pro"):
         r = cost_cny(demo, m)
         print(f"{m:<18} {fmt_cny(r['cost'])}  [{r['band']}]  tier={r['tier']}")
     print("高峰判定示例：", is_peak(datetime(2026, 11, 7, 10, 30, tzinfo=CN)),

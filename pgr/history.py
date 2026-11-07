@@ -36,12 +36,16 @@ class History:
                 tokens INTEGER,
                 cost_cny REAL,
                 secs REAL,
-                note TEXT
+                note TEXT,
+                model TEXT
             )""")
         # 老库补列：同一浏览器标签页 = 同一个会话，用来区分"本次会话"和"更早的历史"
         cols = {r[1] for r in self.con.execute("PRAGMA table_info(turns)")}
         if "session" not in cols:
             self.con.execute("ALTER TABLE turns ADD COLUMN session TEXT")
+        # 留痕：这一条是哪个模型答的（配置名可能与实际服务名不同）
+        if "model" not in cols:
+            self.con.execute("ALTER TABLE turns ADD COLUMN model TEXT")
         self.con.execute("CREATE INDEX IF NOT EXISTS idx_ts ON turns(ts)")
         self.con.execute("CREATE INDEX IF NOT EXISTS idx_session ON turns(session)")
         self.con.commit()
@@ -62,8 +66,8 @@ class History:
         tokens = (cost.get("usage") or {}).get("total") or 0
         cur = self.con.execute(
             """INSERT INTO turns(ts, question, answer, mode, steps, tools, citations,
-                                 tokens, cost_cny, secs, note, session)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                 tokens, cost_cny, secs, note, session, model)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 datetime.now().astimezone().isoformat(timespec="seconds"),
                 payload.get("question") or "",
@@ -78,6 +82,7 @@ class History:
                 round(secs, 1),
                 (payload.get("note") or "")[:400],
                 session or "",
+                payload.get("model") or "",
             ))
         self.con.commit()
         return cur.lastrowid

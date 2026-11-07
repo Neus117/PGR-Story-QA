@@ -178,7 +178,8 @@ def _account(usage: dict, model: str) -> dict:
         SERVED_MODEL = usage["_model"]
         _save_served(SERVED_MODEL)
     u = pricing.normalize(usage)
-    r = pricing.cost_cny(usage, model)
+    # 计价必须按「实际服务的模型」算：配置里可能写的是别名或被路由的名字
+    r = pricing.cost_cny(usage, usage.get("_model") or model)
     TOTALS["requests"] += 1
     TOTALS["tokens"] += u["total"]
     TOTALS["cost"] += r["cost"]
@@ -280,6 +281,9 @@ class Handler(BaseHTTPRequestHandler):
     def _finish(self, payload: dict, secs: float, code: int = 200, session: str = ""):
         """所有问答都从这里出去，保证一定落盘。"""
         try:
+            # 本条回答实际用的模型：优先取本次回包里的 model，其次全局最近值
+            payload["model"] = ((payload.get("usage") or {}).get("_model")
+                                 or SERVED_MODEL or llm.load_config()["model"])
             payload["citations"] = _enrich_citations(payload.get("citations") or [])
             payload["history_id"] = HIST.record(payload, secs, session)
         except Exception as e:          # 落盘失败不能影响回答
@@ -336,7 +340,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_events()
         if path == "/api/config":
             d = config_api.current()
-            # 配置里写的是请求名（deepseek-chat），实际服务的是回包里的 model
+            # 配置里写的是请求名，实际服务的是回包里的 model（旧别名会被路由到别的型号）
             d["served_model"] = SERVED_MODEL
             return self._json(d)
         if path == "/api/config/test":

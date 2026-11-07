@@ -18,7 +18,7 @@ import sys
 
 CONFIG = str(_pl.Path(__file__).resolve().parent.parent / "config.json")
 DEFAULT = {"api_key": "", "base": "https://api.deepseek.com",
-           "model": "deepseek-chat", "timeout": 90}
+           "model": "deepseek-flash", "timeout": 90}
 
 
 from pgr.llm import key_shape_warning  # noqa: E402  同一个判据，不复制一份

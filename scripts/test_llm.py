@@ -31,7 +31,7 @@ def main() -> int:
     if not d["ok"]:
         print(f"  → 证据模式：{d['hint']}")
         print("\n把密钥写进 config.json（不是 config.example.json）：")
-        print('  { "api_key": "sk-...", "base": "https://api.deepseek.com", "model": "deepseek-chat" }')
+        print('  { "api_key": "sk-...", "base": "https://api.deepseek.com", "model": "deepseek-flash" }')
         return 1
 
     warn = d.get("format_warning")
