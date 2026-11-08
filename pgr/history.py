@@ -37,7 +37,12 @@ class History:
                 cost_cny REAL,
                 secs REAL,
                 note TEXT,
-                model TEXT
+                model TEXT,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                cache_hit_tokens INTEGER,
+                cache_miss_tokens INTEGER,
+                peak INTEGER
             )""")
         # 老库补列：同一浏览器标签页 = 同一个会话，用来区分"本次会话"和"更早的历史"
         cols = {r[1] for r in self.con.execute("PRAGMA table_info(turns)")}
@@ -46,6 +51,12 @@ class History:
         # 留痕：这一条是哪个模型答的（配置名可能与实际服务名不同）
         if "model" not in cols:
             self.con.execute("ALTER TABLE turns ADD COLUMN model TEXT")
+        # 用量拆分：只存总数没法在调价后复算花费，所以把明细也留下来
+        for col, decl in (("prompt_tokens", "INTEGER"), ("completion_tokens", "INTEGER"),
+                          ("cache_hit_tokens", "INTEGER"), ("cache_miss_tokens", "INTEGER"),
+                          ("peak", "INTEGER")):
+            if col not in cols:
+                self.con.execute(f"ALTER TABLE turns ADD COLUMN {col} {decl}")
         self.con.execute("CREATE INDEX IF NOT EXISTS idx_ts ON turns(ts)")
         self.con.execute("CREATE INDEX IF NOT EXISTS idx_session ON turns(session)")
         self.con.commit()
@@ -63,11 +74,15 @@ class History:
                     out.append({"label": m})
             cites = out[:30]
         cost = payload.get("cost") or {}
-        tokens = (cost.get("usage") or {}).get("total") or 0
+        usage = cost.get("usage") or {}
+        tokens = usage.get("total") or 0
+        peak = 1 if cost.get("peak") else 0
         cur = self.con.execute(
             """INSERT INTO turns(ts, question, answer, mode, steps, tools, citations,
-                                 tokens, cost_cny, secs, note, session, model)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                 tokens, cost_cny, secs, note, session, model,
+                                 prompt_tokens, completion_tokens, cache_hit_tokens,
+                                 cache_miss_tokens, peak)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 datetime.now().astimezone().isoformat(timespec="seconds"),
                 payload.get("question") or "",
@@ -83,6 +98,8 @@ class History:
                 (payload.get("note") or "")[:400],
                 session or "",
                 payload.get("model") or "",
+                usage.get("prompt"), usage.get("completion"),
+                usage.get("hit"), usage.get("miss"), peak,
             ))
         self.con.commit()
         return cur.lastrowid

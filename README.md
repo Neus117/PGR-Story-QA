@@ -53,6 +53,7 @@
 - 金额是 token × DeepSeek 官方价目算出的**估算**，不是账单。
 - 样本全部发生在**空闲时段**；高峰时段约为 2 倍（工作日 09:00–12:00、14:00–18:00）。
 - 38 条里 25 条只有花费、没有 token 明细，所以均值/中位数包含这部分；能用 token 独立复核的 13 条，均值 ¥0.042、中位 ¥0.031。
+- 从 v1.0.0 之后，每条记录都会存下 `prompt / completion / 缓存命中 / 缓存未命中 / 是否高峰`，可用 `python scripts\audit_cost.py` 按当前价目复算，调价后能看出差额。
 
 ## 快速开始
 
@@ -168,6 +169,7 @@ python -m pgr.update --force              :: 只看有没有更新（只读，2 
 | `python scripts\verify_parse.py` | 检查解析残留的模板标记 |
 | `python scripts\audit_full.py` | **全面健壮性审计**（39 项：接口 / 输入边界 / 密钥泄漏 / 并发 / 数据完整性 / 语料残留 / 静态扫描），自起独立实例，失败返回 1 |
 | `python scripts\check_markup.py` | 语料残留门禁：有维基源码漏进正文就返回 1 |
+| `python scripts\audit_cost.py` | 用存下的用量拆分复算每次提问的花费，与记录值对照 |
 | `python scripts\check_layout.py` | 页脚几何门禁：按钮与输入框齐平、复选框同左缘、版本号居中（容差 1px，深浅两主题都测） |
 | `python scripts\audit.py` | 语料体量与分布审计 |
 

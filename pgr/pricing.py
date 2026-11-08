@@ -62,11 +62,16 @@ def normalize(usage: dict) -> dict:
             "hit": hit, "miss": miss}
 
 
-def cost_cny(usage: dict, model: str, when: datetime | None = None) -> dict:
-    "返回 {cost, peak, tier, detail}；cost 单位元。"
+def cost_cny(usage: dict, model: str, when: datetime | None = None,
+             peak: bool | None = None) -> dict:
+    """返回 {cost, peak, tier, detail}；cost 单位元。
+
+    `peak` 显式给定时优先于按 `when` 推算——复算历史记录要用当时存下的时段，
+    不能用「现在是不是高峰」。
+    """
     u = normalize(usage)
     tier = tier_of(model)
-    peak = is_peak(when)
+    peak = is_peak(when) if peak is None else bool(peak)
     band = "peak" if peak else "off"
     p = PRICES[tier]
     c_hit = u["hit"] / 1e6 * p["hit"][band]

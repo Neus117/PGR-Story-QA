@@ -205,7 +205,7 @@ def _account(usage: dict, model: str) -> dict:
     TOTALS["tokens"] += u["total"]
     TOTALS["cost"] += r["cost"]
     return {"cost": round(r["cost"], 6), "cn": pricing.fmt_cny(r["cost"]),
-            "band": r["band"], "tier": r["tier"], "usage": u,
+            "band": r["band"], "peak": r["peak"], "tier": r["tier"], "usage": u,
             "detail": {k: round(v, 6) for k, v in r["detail"].items()},
             "total_cn": pricing.fmt_cny(TOTALS["cost"])}
 

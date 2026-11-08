@@ -202,6 +202,33 @@ def t_data(health: dict):
 
 
 # ---------------------------------------------------------------- 9. 语料残留
+def t_cost_recompute():
+    """有用量拆分的记录，必须能用价目表复算出与记录一致的花费。"""
+    from pgr import pricing
+    con = sqlite3.connect(DATA / "history.db")
+    con.row_factory = sqlite3.Row
+    rows = [dict(r) for r in con.execute(
+        "SELECT * FROM turns WHERE prompt_tokens IS NOT NULL")]
+    con.close()
+    if not rows:
+        check("花费可复算（无样本，跳过）", True, "尚未产生带用量拆分的记录")
+        return
+    worst = 0.0
+    bad = []
+    for r in rows:
+        usage = {"prompt_tokens": r["prompt_tokens"],
+                 "completion_tokens": r["completion_tokens"],
+                 "prompt_cache_hit_tokens": r["cache_hit_tokens"],
+                 "prompt_cache_miss_tokens": r["cache_miss_tokens"]}
+        got = pricing.cost_cny(usage, r["model"] or "", peak=bool(r["peak"]))["cost"]
+        diff = abs(got - (r["cost_cny"] or 0))
+        worst = max(worst, diff)
+        if diff > 0.0005:
+            bad.append((r["id"], round(diff, 6)))
+    check(f"花费可复算（{len(rows)} 条）", not bad,
+          f"最大偏差 ¥{worst:.6f}" if not bad else f"偏差过大：{bad[:3]}")
+
+
 def t_markup():
     from pgr.markup_check import fatal_total, scan
     r = scan(DATA / "dialogue.jsonl")
@@ -301,6 +328,7 @@ def run_all() -> int:
     t_concurrency()
     t_sse()
     t_data(health)
+    t_cost_recompute()
     t_markup()
     t_static()
     t_log()
