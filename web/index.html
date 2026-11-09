@@ -67,6 +67,17 @@
   header h1,header .upd,header .stat{white-space:nowrap}
 
   /* 启动遮罩：浏览器先弹出来，这里显示进度 */
+  /* 全局提示：JS 异常与"点了没反应"的解释都走这里，不让失败无声无息 */
+  .toast{
+    position:fixed;left:50%;transform:translateX(-50%);bottom:96px;z-index:300;
+    max-width:min(720px,calc(100vw - 48px));padding:8px 14px;border-radius:8px;
+    font-size:12px;line-height:1.6;background:var(--panel-2);color:var(--fg);
+    border:1px solid var(--line);box-shadow:0 8px 24px rgba(0,0,0,.28);
+    transition:opacity .2s ease;
+  }
+  .toast.err{border-color:var(--warn);color:var(--warn)}
+  .toast.hide{opacity:0;pointer-events:none}
+
   .boot{
     position:fixed;inset:0;z-index:200;display:none;align-items:center;justify-content:center;
     background:var(--bg);transition:opacity .3s ease;
@@ -459,6 +470,29 @@ async function loadHistory(){
   }
 }
 
+// ---------- 全局提示与异常捕获 ----------
+let _toastTimer = null;
+function toast(msg, isErr){
+  let el = document.getElementById('toastBox');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'toastBox';
+    el.className = 'toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.className = 'toast' + (isErr ? ' err' : '');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { el.classList.add('hide'); }, isErr ? 10000 : 4000);
+}
+window.addEventListener('error', e => {
+  toast('页面出错：' + (e.message || e.error || 'unknown'), true);
+});
+window.addEventListener('unhandledrejection', e => {
+  const r = e.reason;
+  toast('操作失败：' + ((r && r.message) || r || 'unknown'), true);
+});
+
 // ---------- 主题 ----------
 const themeBtn = document.getElementById('themeBtn');
 
@@ -659,7 +693,10 @@ function rich(s, labelMap){
   // 必须拼成一行：调用方会对整段做 \n -> <br>，多行标签会被拆坏
   const link = (raw) => {
     const hit = labelMap && labelMap[raw];
-    if(!hit || !hit.seq) return `<span class="cite">【${raw}】</span>`;
+    if(!hit || !hit.seq){
+      // 解析不到关卡：仍然是死元素，但至少说明为什么，并把原因挂出来
+      return `<span class="cite" data-nocite="1" title="这条例句在库里对不上具体关卡，无法打开原文">【${raw}】</span>`;
+    }
     const title = esc(hit.title || '');
     const sub = esc((hit.category || '') + '／' + (hit.chapter || ''));
     return `<a class="cite" href="javascript:void 0" data-seq="${hit.seq}"`
@@ -670,7 +707,9 @@ function rich(s, labelMap){
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/^\s*[-*]\s+(?=\S)/gm, '· ')
     .replace(/【([^】]{1,80})】/g, (m, inner) =>
-      inner.startsWith('未核实：') ? `<span class="cite bad">${m}</span>` : link(inner))
+      inner.startsWith('未核实：')
+        ? `<span class="cite bad" data-nocite="核实失败" title="模型标注为未核实：这条例句在库里找不到对应关卡">${m}</span>`
+        : link(inner))
     .replace(/「[^」]{1,120}」/g, m => `<span style="color:var(--fg)">${m}</span>`);
 }
 
@@ -813,6 +852,14 @@ async function openStage(seq, title, sub){
 document.addEventListener('click', e => {
   const close = e.target.closest('[data-close]');
   if(close){ closeViewer(); return; }
+  const dead = e.target.closest('[data-nocite]');
+  if(dead){
+    const why = dead.getAttribute('data-nocite');
+    toast(why === '核实失败'
+      ? '这条出处被标为「未核实」——模型写了它，但库里没有对应关卡，所以打不开原文：' + dead.textContent
+      : '这条出处对不上具体关卡（可能带「等」或是合并引用），所以打不开原文：' + dead.textContent);
+    return;
+  }
   const hit = e.target.closest('[data-seq]');
   if(hit){
     e.preventDefault();
@@ -914,6 +961,61 @@ if(new URLSearchParams(location.search).get('measure') === '1'){
   pre.textContent = JSON.stringify(out);
   document.body.appendChild(pre);
  }, 1500);
+}
+
+// ---------- ?clicktest=1：真实点击探针（排查"点不动"） ----------
+if(new URLSearchParams(location.search).get('clicktest') === '1'){
+  setTimeout(() => {
+    const out = {};
+    const boot = document.getElementById('boot');
+    out.bootDisplay = boot ? getComputedStyle(boot).display : '(无)';
+    out.bootPointer = boot ? getComputedStyle(boot).pointerEvents : '(无)';
+
+    const list = document.getElementById('list');
+    const turns = list ? [...list.querySelectorAll('.turn')] : [];
+    out.turnCount = turns.length;
+    const last = turns[turns.length - 1];
+    out.lastTurnAnchors = last ? last.querySelectorAll('a.cite[data-seq]').length : -1;
+    out.lastTurnSpans = last ? last.querySelectorAll('span.cite').length : -1;
+
+    // 关键：点在哪、那个位置最上层是谁
+    const a = last && last.querySelector('a.cite[data-seq]');
+    const sp = last && last.querySelector('span.cite');
+    const probe = a || sp;
+    if(probe){
+      const r = probe.getBoundingClientRect();
+      const cx = Math.round(r.left + r.width / 2);
+      const cy = Math.round(r.top + r.height / 2);
+      const top = document.elementFromPoint(cx, cy);
+      out.probeIsAnchor = probe.tagName === 'A';
+      out.probeText = probe.textContent.slice(0, 26);
+      out.topElementAtProbe = top ? `${top.tagName}.${top.className}` : '(null)';
+      out.topIsProbe = top === probe || probe.contains(top);
+      out.inViewport = r.top >= 0 && r.bottom <= innerHeight;
+    }
+    // 顺便测一次死出处（span[data-nocite]）点了会不会给提示
+    // 主路径复测：真点一下可点出处，看 viewer 是否打开
+    if(a){
+      a.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+      out.viewerHiddenAfterClick = viewer.hidden;
+      out.viewerTitle = (document.getElementById('viewer-title') || {}).textContent || '';
+    }
+    const dead = document.querySelector('#list span[data-nocite]');
+    if(dead){
+      dead.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+      const t = document.getElementById('toastBox');
+      out.deadToast = t ? t.textContent.slice(0, 40) : '(无提示)';
+    }
+    if(sp){
+      const r2 = sp.getBoundingClientRect();
+      const t2 = document.elementFromPoint(Math.round(r2.left + r2.width/2), Math.round(r2.top + r2.height/2));
+      out.spanTopElement = t2 ? `${t2.tagName}.${t2.className}` : '(null)';
+    }
+    const pre = document.createElement('pre');
+    pre.id = 'clickResult';
+    pre.textContent = JSON.stringify(out, null, 1);
+    document.body.appendChild(pre);
+  }, 2500);
 }
 
 // ---------- 浏览原文 ----------
