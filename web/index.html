@@ -153,6 +153,7 @@
   .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px 20px}
   .card p{margin:0 0 12px}
   .card p:last-child{margin-bottom:0}
+  .streaming{white-space:pre-wrap;line-height:1.85;color:var(--fg)}
   .cite{color:var(--accent);white-space:nowrap}
   /* 能点：金色 + 下划虚线 + 手型；悬停有底色 */
   a.cite{cursor:pointer;border-bottom:1px dotted rgba(var(--accent-rgb),.5);text-decoration:none}
@@ -946,6 +947,13 @@ if(new URLSearchParams(location.search).get('waitingtest') === '1'){
   }, 1200);
 }
 
+// ---------- 流式问答 ----------
+
+const TOOL_CN = {
+  search_lines: '检索台词', read_chapter: '读剧情原文', list_chapters: '翻章节',
+  find_character: '查角色档案', web_search: '联网核对', stage_info: '看关卡信息',
+};
+
 // ---------- 等待浮层 ----------
 const waitingEl = document.getElementById('waiting');
 const waitingSub = document.getElementById('waitingSub');
@@ -976,19 +984,67 @@ async function ask(){
   busy = true; send.disabled = true; hint.textContent = '';
   showWaiting();
   const turn = addTurn(question);
+  const live = turn.querySelector('.card');
   q.value = ''; q.style.height = 'auto';
+  let buf = '', lastPaint = 0, gotDelta = false;
+
+  const paint = () => {
+    const now = performance.now();
+    if(now - lastPaint < 90) return;
+    lastPaint = now;
+    live.innerHTML = `<div class="streaming">${esc(buf)}</div>`;
+    document.getElementById('main').scrollTop = 1e9;
+  };
+
   try{
-    const r = await fetch('/api/ask', {
+    const r = await fetch('/api/ask/stream', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      // 不再发送全量历史：服务端按 session 取最近 10 轮摘要，更省也更快
       body: JSON.stringify({question, session: SID, web: document.getElementById('web').checked})
     });
-    const d = await r.json();
-    if(d.error){ throw new Error(d.error); }
-    render(turn, d);
-    history.push({question: d.question || question, answer: d.answer || ''});
-    if(history.length > 4){ history = history.slice(-4); }
+    if(!r.ok || !r.body){
+      // 流式不可用时退回一次性接口
+      const j = await r.json().catch(() => ({error:'服务不可用'}));
+      if(j.error) throw new Error(j.error);
+      render(turn, j);
+      hideWaiting();
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder('utf-8');
+    let raw = '';
+    while(true){
+      const {value, done} = await reader.read();
+      if(done) break;
+      raw += dec.decode(value, {stream:true});
+      let idx;
+      while((idx = raw.indexOf('\n\n')) >= 0){
+        const block = raw.slice(0, idx);
+        raw = raw.slice(idx + 2);
+        for(const line of block.split('\n')){
+          if(!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if(payload === '[DONE]'){ raw = ''; break; }
+          if(!payload) continue;
+          let ev;
+          try{ ev = JSON.parse(payload); }catch(e){ continue; }
+          if(ev.type === 'tool'){
+            const cn = TOOL_CN[ev.tool] || ev.tool || '检索';
+            waitingSub.textContent = '正在' + cn + '…';
+          }else if(ev.type === 'delta'){
+            if(!gotDelta){ gotDelta = true; hideWaiting(); }
+            buf += ev.text;
+            paint();
+          }else if(ev.type === 'done'){
+            hideWaiting();
+            if(ev.payload && ev.payload.answer) render(turn, ev.payload);
+            else throw new Error((ev.payload && ev.payload.error) || '没有拿到回答');
+          }
+        }
+      }
+    }
+    if(!gotDelta && !turn.querySelector('.md')) throw new Error('连接中断，没有收到回答');
   }catch(e){
+    hideWaiting();
     turn.innerHTML = `<div class="q">${esc(question)}</div>
       <div class="card"><p class="err">请求失败：${esc(String(e.message||e))}</p></div>`;
   }finally{

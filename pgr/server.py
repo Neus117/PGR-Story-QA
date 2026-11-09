@@ -235,8 +235,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache, no-store")
-        self.send_header("Connection", "keep-alive")
+        # 既没有 Content-Length 也没有分块，只能靠关闭连接来界定响应体；
+        # 声明 keep-alive 会让浏览器一直等“结束”，数据块收不到
+        self.send_header("Connection", "close")
         self.send_header("X-Accel-Buffering", "no")
+        self.close_connection = True
         self.end_headers()
         with SSE_LOCK:
             SSE_CLIENTS += 1
@@ -314,6 +317,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _finish(self, payload: dict, secs: float, code: int = 200, session: str = ""):
         """所有问答都从这里出去，保证一定落盘。"""
+        payload = self._finalize(payload, secs, session)
+        return self._json(payload, code)
+
+    def _finalize(self, payload: dict, secs: float, session: str = "") -> dict:
+        """补全出处、落盘、后台摘要——不写响应，SSE 端点也要用同一套。"""
         try:
             # 本条回答实际用的模型：优先取本次回包里的 model，其次全局最近值
             payload["model"] = ((payload.get("usage") or {}).get("_model")
@@ -346,7 +354,31 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         except Exception as e:          # 落盘失败不能影响回答
             print(f"  [history] 写入失败: {e}", flush=True)
-        return self._json(payload, code)
+        return payload
+
+    # ---------- SSE ----------
+    def _sse_start(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+    def _sse_send(self, obj):
+        try:
+            body = ("data: " + json.dumps(obj, ensure_ascii=False) + "\n\n").encode("utf-8")
+            self.wfile.write(body)
+            self.wfile.flush()
+        except Exception:
+            pass
+
+    def _sse_end(self):
+        try:
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except Exception:
+            pass
 
     def _json(self, obj, code=200):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -553,7 +585,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(res, 200 if res.get("ok") else 400)
         if urlparse(self.path).path == "/api/update/apply":
             return self._start_update()
-        if urlparse(self.path).path != "/api/ask":
+        _path = urlparse(self.path).path
+        stream_mode = (_path == "/api/ask/stream")
+        if _path not in ("/api/ask", "/api/ask/stream"):
             return self._json({"error": "not found"}, 404)
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -586,12 +620,15 @@ class Handler(BaseHTTPRequestHandler):
                 if memories:
                     _log().info("注入最近 %d 轮摘要，共 %d 字", len(memories),
                                 sum(len(m["summary"]) for m in memories))
-                out = agent.run(question, memories=memories)
+                if stream_mode:
+                    self._sse_start()
+                out = agent.run(question, memories=memories,
+                                on_event=self._sse_send if stream_mode else None)
                 t_agent = (time.time() - t0) * 1000
                 cost = _account(out.get("usage", {}), llm.load_config()["model"])
                 cost["cn"] = pricing.fmt_cny(cost["cost"])
                 cost["total_cn"] = pricing.fmt_cny(TOTALS["cost"])
-                return self._finish({
+                payload = {
                     "question": question,
                     "answer": out.get("answer", ""),
                     "mode": out.get("mode"),
@@ -603,7 +640,13 @@ class Handler(BaseHTTPRequestHandler):
                     "chars": 0, "prompt_chars": 0, "batches": 0, "stage_count": 0,
                     "citations": [], "excerpts": [], "external": [],
                     "cost": cost,
-                }, (time.time() - t0), session=_sid)
+                }
+                if stream_mode:
+                    final = self._finalize(payload, time.time() - t0, _sid)
+                    self._sse_send({"type": "done", "payload": final})
+                    self._sse_end()
+                    return
+                return self._finish(payload, (time.time() - t0), session=_sid)
 
             t0 = time.time()
             with _lock:

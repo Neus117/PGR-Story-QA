@@ -97,6 +97,78 @@ def _chat(messages: list[dict], max_tokens: int = MAX_OUTPUT_TOKENS,
         return "", {}, f"{type(e).__name__}: {e}"
 
 
+def _chat_stream(messages: list[dict], on_delta, max_tokens: int = 1200,
+                 temperature: float = 0.3, tools: list | None = None
+                 ) -> tuple[str, dict, str, list]:
+    """流式调用：正文边收边回调 on_delta(text)，同时累积 tool_calls。
+
+    返回 (全文, usage, 错误, tool_calls)。tool_calls 结构与非流式回包一致。
+    """
+    cfg = load_config()
+    if not cfg["api_key"]:
+        return "", {}, "未配置 API Key", []
+    payload = {"model": cfg["model"], "messages": messages,
+               "temperature": temperature, "max_tokens": max_tokens, "stream": True}
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    req = urllib.request.Request(
+        cfg["base"].rstrip("/") + "/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"), method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Authorization", "Bearer " + cfg["api_key"])
+    parts, usage = [], {}
+    calls: dict[int, dict] = {}
+    try:
+        with urllib.request.urlopen(req, timeout=cfg["timeout"]) as resp:
+            for raw in resp:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                chunk = line[5:].strip()
+                if chunk == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(chunk)
+                except Exception:
+                    continue
+                if obj.get("usage"):
+                    usage = obj["usage"]
+                if obj.get("model"):
+                    usage["_model"] = obj["model"]
+                for ch in obj.get("choices") or []:
+                    delta = ch.get("delta") or {}
+                    piece = delta.get("content") or ""
+                    if piece:
+                        parts.append(piece)
+                        try:
+                            on_delta(piece)
+                        except Exception:
+                            pass
+                    for tc in delta.get("tool_calls") or []:
+                        i = tc.get("index", 0)
+                        cur = calls.setdefault(i, {"id": "", "type": "function",
+                                                   "function": {"name": "", "arguments": ""}})
+                        if tc.get("id"):
+                            cur["id"] = tc["id"]
+                        fn = tc.get("function") or {}
+                        if fn.get("name"):
+                            cur["function"]["name"] = fn["name"]
+                        if fn.get("arguments"):
+                            cur["function"]["arguments"] += fn["arguments"]
+        return ("".join(parts).strip(), usage, "",
+                [calls[k] for k in sorted(calls)])
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            pass
+        return "".join(parts).strip(), usage, f"HTTP {e.code}：{detail}", []
+    except Exception as e:
+        return "".join(parts).strip(), usage, f"{type(e).__name__}: {e}", []
+
+
 SUMMARIZE_BATCH = """你在为《战双帕弥什》玩家整理剧情梗概。下面是同一章里连续的几段关卡原文。
 
 要求：

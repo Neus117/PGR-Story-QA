@@ -93,7 +93,7 @@ class Toolbox:
             "hint": "用 read_chapter 读取这些章节的原文；章节名原样传入即可。",
         }
 
-    def read_chapter(self, chapter: str, offset: int = 0) -> dict:
+    def read_chapter(self, chapter: str, offset: int = 0, focus: str = "") -> dict:
         chapter = (chapter or "").strip()
         if not chapter:
             return {"error": "chapter 不能为空"}
@@ -121,6 +121,29 @@ class Toolbox:
             full.append(piece)
             pos += len(piece)
         text = "".join(full)
+
+        # 带 focus 时只回命中段落（前后各留一段）：整章上下文是最大的时间开销
+        focus = (focus or "").strip()
+        if focus:
+            paras = [x for x in text.split("\n") if x.strip()]
+            keys = [focus] + [focus[i:i + 2] for i in range(max(0, len(focus) - 1))]
+            hit = [i for i, para in enumerate(paras) if any(k and k in para for k in keys)]
+            if hit:
+                picked, last = [], -2
+                for i in hit[:12]:
+                    for j in range(max(0, i - 1), min(len(paras), i + 2)):
+                        if j != last:
+                            picked.append(paras[j])
+                            last = j
+                body = "\n".join(picked)
+                return {
+                    "chapter": chap, "category": cat, "stages": len(stages),
+                    "total_chars": len(text), "focus": focus,
+                    "matched": len(hit), "returned_chars": len(body),
+                    "text": body[:READ_BUDGET],
+                    "note": "只返回命中段落的上下文；需要更多可换 focus 或不带 focus 读整章",
+                }
+
         off = max(0, int(offset or 0))
         chunk = text[off: off + READ_BUDGET]
         return {
@@ -283,11 +306,12 @@ TOOL_SPECS = [
         "type": "function",
         "function": {
             "name": "read_chapter",
-            "description": "读取某一章的剧情原文（分段返回，单次约 1.2 万字）。要讲完整故事、概述章节、看某段经过时必须用。",
+            "description": "读取某一章的剧情原文。带 focus 时只返回命中段落及其上下文（快、省）；不带则分段返回整章（单次约 1.2 万字，慢）。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "chapter": {"type": "string", "description": "章节名，可用简称，如 烛灯刑、烬海异途、15 绝海星火"},
+                    "focus": {"type": "string", "description": "想在这一章里找的关键词或人名。知道自己在找什么时务必带上"},
                     "offset": {"type": "integer", "description": "续读偏移，用上次返回的 next_offset"},
                 },
                 "required": ["chapter"],

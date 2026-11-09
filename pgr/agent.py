@@ -26,7 +26,8 @@ SYSTEM = """你是《战双帕弥什》的剧情资料助手。你有一批工�
 
 检索预算（务必遵守）：
 - 总共最多 6 次检索就要收口作答。多数问题 3~4 次检索已经够。
-- 需要上下文时**优先 read_chapter 一次读完整章**，不要用 search_lines 反复试探。
+- 知道要找什么时，用 read_chapter(chapter, focus="关键词") 只读命中段落；
+  要通读整章（概述剧情）时才不带 focus。不要用 search_lines 反复试探。
 - 拿到 2~3 条关键证据就停下来回答，不要为了"更全"继续翻。
 
 回答要求：
@@ -73,7 +74,7 @@ def _chat(messages: list[dict], tools: list[dict] | None,
 
 
 def run(question: str, memories: list[dict] | None = None,
-        history: list[dict] | None = None) -> dict:
+        history: list[dict] | None = None, on_event=None) -> dict:
     """返回 {answer, mode, steps, tool_calls, usage, note}。
 
     `memories` 是最近 N 轮的一句话摘要（服务端从库里取），只用于理解指代；
@@ -115,11 +116,21 @@ def run(question: str, memories: list[dict] | None = None,
                 "阅读预算已用完。现在必须基于已经读到的内容直接回答；"
                 "没覆盖到的部分，说明你的答案覆盖了哪些章节即可，不要再调工具。"})
             nudged = True
-        msg, usage, err = _chat(messages, None if must_answer else TOOL_SPECS,
-                                max_tokens=1200 if must_answer else 3000)
-        if err:
-            return {"answer": last_text, "mode": "error", "steps": step,
-                    "tool_calls": trace, "usage": total, "note": err}
+        if on_event:
+            # 全程流式：正文边收边推；工具调用在流里累积
+            text, usage, err, tcs = llm._chat_stream(
+                messages, lambda d: on_event({"type": "delta", "text": d}),
+                max_tokens=1200 if must_answer else 3000, temperature=0.3,
+                tools=None if must_answer else TOOL_SPECS)
+            usage = dict(usage or {})
+            usage.setdefault("prompt_tokens", 0)
+            usage.setdefault("completion_tokens", 0)
+            usage.setdefault("total_tokens", (usage.get("prompt_tokens") or 0)
+                             + (usage.get("completion_tokens") or 0))
+            msg = {"content": text or "", "tool_calls": tcs or []}
+        else:
+            msg, usage, err = _chat(messages, None if must_answer else TOOL_SPECS,
+                                    max_tokens=1200 if must_answer else 3000)
         for k, v in usage.items():
             if isinstance(v, int):
                 total[k] = total.get(k, 0) + v
@@ -144,6 +155,12 @@ def run(question: str, memories: list[dict] | None = None,
         for c in calls:
             fn = c.get("function", {})
             name = fn.get("name", "")
+            if on_event:
+                try:
+                    on_event({"type": "tool", "tool": name,
+                              "args": (fn.get("arguments") or "")[:120]})
+                except Exception:
+                    pass
             result = box.dispatch(name, fn.get("arguments", "{}"))
             if len(result) > TOOL_RESULT_CAP:
                 result = result[:TOOL_RESULT_CAP] + '…（结果过长已截断）"}'
