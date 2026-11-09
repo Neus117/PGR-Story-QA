@@ -305,6 +305,19 @@ class Handler(BaseHTTPRequestHandler):
             # 本条回答实际用的模型：优先取本次回包里的 model，其次全局最近值
             payload["model"] = ((payload.get("usage") or {}).get("_model")
                                  or SERVED_MODEL or llm.load_config()["model"])
+            # agent 模式不返回 citations（出处写在正文里），这里补一次提取，
+            # 否则当次回答的出处全是死标签，要刷新后才变可点
+            if not payload.get("citations"):
+                answer = payload.get("answer") or ""
+                if answer:
+                    from .history import CITE_RE
+                    seen = []
+                    for m in CITE_RE.findall(answer):
+                        if m.startswith('未核实：'):
+                            continue
+                        if m not in seen:
+                            seen.append(m)
+                    payload["citations"] = [{"label": m} for m in seen[:30]]
             payload["citations"] = _enrich_citations(payload.get("citations") or [])
             with DB_LOCK:
                 payload["history_id"] = HIST.record(payload, secs, session)
