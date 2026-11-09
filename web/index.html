@@ -78,6 +78,28 @@
   .toast.err{border-color:var(--warn);color:var(--warn)}
   .toast.hide{opacity:0;pointer-events:none}
 
+  /* 提问等待：整窗压暗 + 居中面板。不报假进度，只给"还在动"和已等待时长 */
+  .waiting{
+    position:fixed;inset:0;z-index:240;display:flex;align-items:center;justify-content:center;
+    background:var(--backdrop);backdrop-filter:blur(2px);
+  }
+  .waiting-panel{
+    width:300px;padding:24px 24px 20px;text-align:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);
+  }
+  .waiting-title{font-size:14px;color:var(--fg);letter-spacing:.02em}
+  .waiting-sub{margin-top:8px;font-size:12px;color:var(--fg-faint);font-variant-numeric:tabular-nums}
+  .waiting-bar{margin-top:16px;height:3px;border-radius:2px;background:var(--panel-2);overflow:hidden;position:relative}
+  .waiting-bar i{
+    position:absolute;top:0;bottom:0;width:38%;border-radius:2px;background:var(--accent);
+    animation:waitSweep 1.3s cubic-bezier(.4,0,.2,1) infinite;
+  }
+  .waiting[hidden]{display:none}   /* 没有这条，hidden 会被 display:flex 覆盖，浮层一直挡着整页 */
+  @keyframes waitSweep{from{left:-38%}to{left:100%}}
+  @media (prefers-reduced-motion: reduce){
+    .waiting-bar i{animation:none;left:0;width:100%;opacity:.45}
+  }
+
   .boot{
     position:fixed;inset:0;z-index:200;display:none;align-items:center;justify-content:center;
     background:var(--bg);transition:opacity .3s ease;
@@ -259,6 +281,14 @@
     <div class="boot-title">战双剧情问答</div>
     <div class="boot-bar"><i id="bootBar"></i></div>
     <div class="boot-text" id="bootText">正在启动…</div>
+  </div>
+</div>
+
+<div class="waiting" id="waiting" hidden>
+  <div class="waiting-panel" role="status" aria-live="polite">
+    <div class="waiting-title">正在查询剧情库</div>
+    <div class="waiting-sub" id="waitingSub">已等待 0 秒</div>
+    <div class="waiting-bar"><i></i></div>
   </div>
 </div>
 
@@ -877,10 +907,55 @@ document.addEventListener('keydown', e => {
   if(e.key === 'Escape' && !viewer.hidden) closeViewer();
 });
 
+// ---------- ?waitingtest=1：确定性验证等待浮层（不调用模型） ----------
+if(new URLSearchParams(location.search).get('waitingtest') === '1'){
+  setTimeout(() => {
+    const out = {};
+    const disp = () => getComputedStyle(waitingEl).display;
+    out.idleHidden = waitingEl.hidden; out.idleDisplay = disp();
+    showWaiting();
+    out.shownHidden = waitingEl.hidden; out.shownDisplay = disp();
+    out.timerRunning = waitingTimer !== null;
+    out.shownSub = waitingSub.textContent;
+    hideWaiting();
+    out.hidHidden = waitingEl.hidden; out.hidDisplay = disp();
+    out.timerCleared = waitingTimer === null;
+    const pre = document.createElement('pre');
+    pre.id = 'waitResult';
+    pre.textContent = JSON.stringify(out);
+    document.body.appendChild(pre);
+  }, 1200);
+}
+
+// ---------- 等待浮层 ----------
+const waitingEl = document.getElementById('waiting');
+const waitingSub = document.getElementById('waitingSub');
+let waitingTimer = null;
+
+function showWaiting(){
+  waitingEl.hidden = false;
+  const t0 = Date.now();
+  const tick = () => {
+    const sec = Math.floor((Date.now() - t0) / 1000);
+    waitingSub.textContent = sec < 20
+      ? `已等待 ${sec} 秒`
+      : `已等待 ${sec} 秒 · 这次比较久，仍在处理`;
+  };
+  tick();
+  clearInterval(waitingTimer);
+  waitingTimer = setInterval(tick, 500);
+}
+function hideWaiting(){
+  waitingEl.hidden = true;
+  clearInterval(waitingTimer);
+  waitingTimer = null;
+}
+
 async function ask(){
   const question = q.value.trim();
   if(!question || busy) return;
   busy = true; send.disabled = true; hint.textContent = '';
+  showWaiting();
   const turn = addTurn(question);
   q.value = ''; q.style.height = 'auto';
   try{
@@ -897,6 +972,7 @@ async function ask(){
     turn.innerHTML = `<div class="q">${esc(question)}</div>
       <div class="card"><p class="err">请求失败：${esc(String(e.message||e))}</p></div>`;
   }finally{
+    hideWaiting();
     busy = false; send.disabled = false;
     document.getElementById('main').scrollTop = 1e9;
   }
@@ -1169,6 +1245,8 @@ q.dispatchEvent(new Event('input'));   // 空态也按内容算一次高度，�
 if(new URLSearchParams(location.search).get('key') === '1'){ openKeyDialog(); }
 // ?browse=1 直接打开原文浏览
 if(new URLSearchParams(location.search).get('browse') === '1'){ openBrowse(); }
+// ?waiting=1 预览等待浮层
+if(new URLSearchParams(location.search).get('waiting') === '1'){ showWaiting(); }
 
 const _stageParam = new URLSearchParams(location.search).get('stage');
 if(_stageParam){ openStage(_stageParam, '', ''); }
