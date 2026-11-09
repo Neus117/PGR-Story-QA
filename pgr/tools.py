@@ -299,12 +299,14 @@ class Toolbox:
         return None
 
     def resolve_cite(self, body: str) -> str | None:
-        """规范写法：章节级匹配返回「分类／章节」，关卡级返回「分类／章节／关卡」。"""
+        """一律补成关卡级「分类／章节／关卡」。
+
+        只匹配到章节时也补上该章第一关的关卡名：没有关卡名就打不开原文，
+        而且正文和出处列表要用同一个写法，前端才连得起来。
+        """
         row = self.resolve_row(body)
         if not row:
             return None
-        if row["kind"] == "chapter":
-            return f'{row["category"]}／{row["chapter"]}'
         return f'{row["category"]}／{row["chapter"]}／{row["title"]}'
 
     def verify_and_fix(self, answer: str) -> tuple[str, list[dict]]:
