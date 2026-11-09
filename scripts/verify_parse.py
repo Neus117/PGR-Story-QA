@@ -4,8 +4,9 @@ _sys.path.insert(0, str(_pl.Path(__file__).resolve().parent.parent))
 import os, re, json
 from collections import Counter
 
-RAW = r"D:\Coding\workspace\pgr-story\data\raw"
-DATA = r"D:\Coding\workspace\pgr-story\data"
+_ROOT = _pl.Path(__file__).resolve().parent.parent
+RAW = str(_ROOT / "data" / "raw")
+DATA = str(_ROOT / "data")
 
 rows = [json.loads(l) for l in open(os.path.join(DATA, "dialogue.jsonl"), encoding="utf-8")]
 by = {r["title"]: r for r in rows}

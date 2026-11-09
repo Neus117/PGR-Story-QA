@@ -38,18 +38,28 @@ def step(name: str, fn) -> bool:
 def main() -> int:
     skip_fetch = "--skip-fetch" in sys.argv
     if not skip_fetch:
-        if not step("1/4 枚举章节（SMW 查询）", enum_mod.main):
+        if not step("1/5 枚举章节（SMW 查询）", enum_mod.main):
             return 1
-        if not step("2/4 抓取关卡原文（约 74 次请求）", fetch_all.main):
+        if not step("2/5 抓取关卡原文（约 74 次请求）", fetch_all.main):
             return 1
     else:
         print("跳过抓取，直接使用 data/raw/ 现有内容")
-    if not step("3/4 解析 wikitext 并清洗", parse.main):
+    if not step("3/5 解析 wikitext 并清洗", parse.main):
         return 1
     if not step("4/4 建立检索索引", index.main):
         return 1
+    # 新克隆的库必须干净：维基源码漏进正文就当场失败，而不是等到提问时才发现
+    if not step("5/5 语料残留门禁", _verify):
+        return 1
     print("\n完成。启动：python app.py")
     return 0
+
+
+def _verify() -> int:
+    """调用残留门禁脚本（它自己是可执行的）。"""
+    import subprocess
+    script = Path(__file__).with_name("check_markup.py")
+    return subprocess.call([sys.executable, str(script)])
 
 
 if __name__ == "__main__":
