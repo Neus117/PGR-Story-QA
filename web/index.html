@@ -394,6 +394,7 @@
       <input type="checkbox" id="web" checked style="vertical-align:-1px"> 联网补充
       <span style="color:var(--fg-faint)">（BWIKI / 哔哩哔哩 / 玩家社区；结果标为外部资料，不当作台词）</span>
       <span class="kbd">Enter 发送 · Ctrl+Enter 换行</span>
+      <span class="kbd" id="memnote" title="每轮回答后自动生成一句话摘要，下次提问只带摘要，不重复发送全文">记住最近 10 轮（摘要）</span>
     </label>
   </div>
   <div class="hint" id="hint"></div>
@@ -979,7 +980,8 @@ async function ask(){
   try{
     const r = await fetch('/api/ask', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({question, history, session: SID, web: document.getElementById('web').checked})
+      // 不再发送全量历史：服务端按 session 取最近 10 轮摘要，更省也更快
+      body: JSON.stringify({question, session: SID, web: document.getElementById('web').checked})
     });
     const d = await r.json();
     if(d.error){ throw new Error(d.error); }

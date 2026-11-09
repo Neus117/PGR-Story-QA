@@ -42,7 +42,8 @@ class History:
                 completion_tokens INTEGER,
                 cache_hit_tokens INTEGER,
                 cache_miss_tokens INTEGER,
-                peak INTEGER
+                peak INTEGER,
+                summary TEXT
             )""")
         # 老库补列：同一浏览器标签页 = 同一个会话，用来区分"本次会话"和"更早的历史"
         cols = {r[1] for r in self.con.execute("PRAGMA table_info(turns)")}
@@ -57,6 +58,8 @@ class History:
                           ("peak", "INTEGER")):
             if col not in cols:
                 self.con.execute(f"ALTER TABLE turns ADD COLUMN {col} {decl}")
+        if "summary" not in cols:
+            self.con.execute("ALTER TABLE turns ADD COLUMN summary TEXT")
         self.con.execute("CREATE INDEX IF NOT EXISTS idx_ts ON turns(ts)")
         self.con.execute("CREATE INDEX IF NOT EXISTS idx_session ON turns(session)")
         self.con.commit()
@@ -103,6 +106,33 @@ class History:
             ))
         self.con.commit()
         return cur.lastrowid
+
+    # ---------- 摘要（跨轮记忆） ----------
+    def set_summary(self, turn_id: int, summary: str) -> None:
+        try:
+            self.con.execute("UPDATE turns SET summary=? WHERE id=?",
+                             ((summary or "").strip()[:200], turn_id))
+            self.con.commit()
+        except Exception:
+            pass
+
+    def recent_summaries(self, session: str = "", limit: int = 10) -> list[dict]:
+        """最近 N 轮的一句话记忆。摘要还没生成时用答案开头兜底，保证不失忆。"""
+        if session:
+            rows = self.con.execute(
+                "SELECT id, question, summary, answer FROM turns "
+                "WHERE session=? ORDER BY id DESC LIMIT ?", (session, limit)).fetchall()
+        else:
+            rows = self.con.execute(
+                "SELECT id, question, summary, answer FROM turns "
+                "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        out = []
+        for r in reversed(rows):                      # 按时间正序
+            text = (r["summary"] or "").strip()
+            if not text:
+                text = " ".join((r["answer"] or "").split())[:80]
+            out.append({"id": r["id"], "question": r["question"], "summary": text})
+        return out
 
     # ---------- 读 ----------
     def recent(self, limit: int = 20, offset: int = 0, session: str = "") -> list[dict]:

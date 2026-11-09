@@ -64,17 +64,31 @@ def _chat(messages: list[dict], tools: list[dict] | None) -> tuple[dict, dict, s
         return {}, {}, f"{type(e).__name__}: {e}"
 
 
-def run(question: str, history: list[dict] | None = None) -> dict:
-    """返回 {answer, mode, steps, tool_calls, usage, note}。"""
+def run(question: str, memories: list[dict] | None = None,
+        history: list[dict] | None = None) -> dict:
+    """返回 {answer, mode, steps, tool_calls, usage, note}。
+
+    `memories` 是最近 N 轮的一句话摘要（服务端从库里取），只用于理解指代；
+    细节一律重新检索。`history` 保留兼容，等价于把全文转成摘要。
+    """
     box = Toolbox()
     messages: list[dict] = [{"role": "system", "content": SYSTEM}]
-    for turn in (history or [])[-3:]:
-        q = (turn.get("question") or "").strip()
-        a = (turn.get("answer") or "").strip()
-        if q:
-            messages.append({"role": "user", "content": q})
-            messages.append({"role": "assistant",
-                             "content": "（此前回答，可能有误，不要直接复述其出处）" + (a[:400] or "（略）")})
+    mem = list(memories or [])
+    if not mem and history:                     # 兼容旧调用：把全文当摘要用
+        mem = [{"question": t.get("question"), "summary": (t.get("answer") or "")[:80]}
+               for t in history]
+    if mem:
+        lines = []
+        for i, it in enumerate(mem[-10:], 1):
+            q = (it.get("question") or "").strip()
+            sm = (it.get("summary") or "").strip()
+            if q or sm:
+                lines.append(f"{i}. 问：{q} → {sm}")
+        if lines:
+            messages.append({"role": "system", "content":
+                "以下是之前几轮问答的摘要，用于理解指代和延续话题；"
+                "涉及具体情节与出处时必须重新检索，不要凭摘要作答：\n"
+                + "\n".join(lines)})
     messages.append({"role": "user", "content": question})
 
     total = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,

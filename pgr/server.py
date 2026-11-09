@@ -192,6 +192,19 @@ def get_searcher() -> Searcher:
     return _searcher
 
 
+def _summarize_turn(turn_id: int, question: str, answer: str) -> None:
+    """把这一轮压成一句话，供后续提问注入。失败就留着，下次用答案开头兜底。"""
+    try:
+        prompt = (f"问题：{question[:120]}\n回答：{answer[:1200]}\n\n"
+                  "用不超过 25 个字概括这轮问答确定了什么。只输出摘要本身，不要标点开头。")
+        text, usage, err = llm._chat([{"role": "user", "content": prompt}], max_tokens=256, temperature=0)
+        if err or not text:
+            return
+        HIST.set_summary(turn_id, text.strip().splitlines()[0])
+    except Exception:
+        pass
+
+
 def _account(usage: dict, model: str) -> dict:
     """记一笔账：本请求的 token/费用 + 进程内累计。"""
     global SERVED_MODEL
@@ -321,6 +334,16 @@ class Handler(BaseHTTPRequestHandler):
             payload["citations"] = _enrich_citations(payload.get("citations") or [])
             with DB_LOCK:
                 payload["history_id"] = HIST.record(payload, secs, session)
+            # 摘要放到响应之后再算，不拖慢当次回答；下一轮才用到
+            try:
+                if payload.get("answer"):
+                    threading.Thread(target=_summarize_turn,
+                                     args=(payload["history_id"],
+                                           payload.get("question") or "",
+                                           payload.get("answer") or ""),
+                                     daemon=True).start()
+            except Exception:
+                pass
         except Exception as e:          # 落盘失败不能影响回答
             print(f"  [history] 写入失败: {e}", flush=True)
         return self._json(payload, code)
@@ -555,7 +578,15 @@ class Handler(BaseHTTPRequestHandler):
             # ---- 默认：agent 工具循环（无意图正则、无路由阈值）----
             if not data.get("legacy"):
                 t0 = time.time()
-                out = agent.run(question, history)
+                try:
+                    memories = HIST.recent_summaries(_sid, 10)
+                except Exception as e:
+                    memories = []
+                    _log().warning('读取摘要失败：%s: %s', type(e).__name__, e)
+                if memories:
+                    _log().info("注入最近 %d 轮摘要，共 %d 字", len(memories),
+                                sum(len(m["summary"]) for m in memories))
+                out = agent.run(question, memories=memories)
                 t_agent = (time.time() - t0) * 1000
                 cost = _account(out.get("usage", {}), llm.load_config()["model"])
                 cost["cn"] = pricing.fmt_cny(cost["cost"])
