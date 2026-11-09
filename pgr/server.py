@@ -82,6 +82,22 @@ def _cite_index():
     return _CITE_INDEX
 
 
+_CITE_ROWS = None
+
+
+def _cite_rows():
+    """全量关卡缓存，给引用做包含匹配用。"""
+    global _CITE_ROWS
+    if _CITE_ROWS is None:
+        try:
+            con = _one_conn()
+            _CITE_ROWS = [dict(r) for r in con.execute(
+                "SELECT seq, category, chapter, title FROM stages ORDER BY seq")]
+        except Exception:
+            _CITE_ROWS = []
+    return _CITE_ROWS
+
+
 def _enrich_citations(cites: list) -> list:
     """{"label": "分类／章节／关卡"} -> 带 seq/url 的可点击结构。全程走内存索引。"""
     if not cites:
@@ -97,16 +113,25 @@ def _enrich_citations(cites: list) -> list:
             out.append(c)
             continue
         label = c.get("label") or ""
+        row = None
         try:
-            parts = [x.strip() for x in _re.split(r"[／/]", label) if x.strip()]
-            row = None
-            if len(parts) >= 3:
-                want = parts[-1]
-                row = by_title.get(want) or by_norm.get(want.replace(" ", ""))
-            if row is None and len(parts) >= 2:
-                chap_raw = parts[-2] if len(parts) >= 3 else parts[-1]
-                bare = _re.sub(r"^[0-9A-Za-z]+[\s\-]*", "", chap_raw).strip()
-                row = by_chapter.get(bare)
+            # 用包含匹配：章节名可能自带斜杠（赛琳娜·希声/好感剧情），切开就错位
+            norm_label = label.replace("／", "/").replace(" ", "")
+            best_len = 0
+            for r in _cite_rows():
+                ch = (r["chapter"] or "").replace(" ", "")
+                ti = (r["title"] or "").replace(" ", "")
+                if ch and ti and ch in norm_label and ti in norm_label:
+                    if len(ch) + len(ti) > best_len:
+                        row, best_len = r, len(ch) + len(ti)
+            if row is None:
+                # 只写了章节（如「好感度剧情／赛琳娜·希声／好感剧情」）：
+                # 取该章第一关，至少让人点得开
+                best_len = 0
+                for r in _cite_rows():
+                    ch = (r["chapter"] or "").replace(" ", "")
+                    if ch and ch in norm_label and len(ch) > best_len:
+                        row, best_len = r, len(ch)
         except Exception:
             row = None
         if row is None:

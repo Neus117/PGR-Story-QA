@@ -90,8 +90,37 @@ class Toolbox:
             "similar_names": [{"name": s["name"], "n": s["n"]} for s in similar][:5],
             "stages": len(rows),
             "top_chapters": [{"category": c, "chapter": ch, "spoken": v} for (c, ch), v in top],
+            "affection": self.affection_index(target["name"]),
             "hint": "用 read_chapter 读取这些章节的原文；章节名原样传入即可。",
         }
+
+    def affection_index(self, name: str) -> list:
+        """某角色的好感度剧情索引。
+
+        同一角色的好感剧情在 wiki 上可能散在两个章节名下
+        （「比安卡·深痕」与「比安卡·深痕/好感剧情」），这里按角色名合并。
+        """
+        name = (name or "").strip()
+        if not name:
+            return []
+        like = f"%{name}%"
+        rows = self.con.execute(
+            "SELECT chapter, seq, title FROM stages "
+            "WHERE category='好感度剧情' AND (chapter LIKE ? OR title LIKE ?) "
+            "ORDER BY seq", (like, like)).fetchall()
+        merged: dict[str, dict] = {}
+        for r in rows:
+            base = (r["chapter"] or "").split("/")[0].strip()
+            item = merged.get(base)
+            if item is None:
+                merged[base] = {"character": base, "chapters": [r["chapter"]],
+                                "stages": 1, "seq": r["seq"], "first_title": r["title"]}
+            else:
+                item["stages"] += 1
+                if r["chapter"] not in item["chapters"]:
+                    item["chapters"].append(r["chapter"])
+        out = sorted(merged.values(), key=lambda x: x["seq"])
+        return out
 
     def read_chapter(self, chapter: str, offset: int = 0, focus: str = "") -> dict:
         chapter = (chapter or "").strip()
@@ -196,44 +225,50 @@ class Toolbox:
                              "source": r["source"], "snippet": r["snippet"][:160]} for r in rows]}
 
     # ---------------- 引用校验 ----------------
+    def _stage_rows(self):
+        """全量关卡的一行缓存（3,692 行，构建一次即可）。"""
+        rows = getattr(self, "_rows_cache", None)
+        if rows is None:
+            rows = self.con.execute(
+                "SELECT seq, category, chapter, title FROM stages").fetchall()
+            self._rows_cache = rows
+        return self._rows_cache
+
     def resolve_cite(self, body: str) -> str | None:
         """把模型写的【分类／章节／关卡】对回数据库里的规范写法。
 
-        容错点：
-          · 章节编号写错（"27 摇篮游行"实际是 26）——按去掉编号后的名字匹配；
-          · 关卡名带不带编号都试一次；
-        对不上就返回 None，交给上层标记为未核实（多半是模型编的）。
+        用「包含匹配」而不是按分隔符切分：好感度剧情的章节名里本身就带斜杠
+        （如 赛琳娜·希声/好感剧情），一旦按 ／ 切开就错位，整条引用会变成未核实。
         """
-        parts = [p.strip() for p in re.split(r"[／/]", body) if p.strip()]
-        if len(parts) >= 2:
-            chap_raw = parts[-2] if len(parts) >= 3 else parts[-1]
-            stage_raw = parts[-1] if len(parts) >= 3 else None
-            chap_bare = bare(chap_raw)
-            # 找章节
-            rows = self.con.execute("SELECT DISTINCT category, chapter FROM stages").fetchall()
-            cands = [r for r in rows if bare(r["chapter"]) == chap_bare] or \
-                    [r for r in rows if chap_bare and chap_bare in r["chapter"]]
-            if not cands:
-                return None
-            cat, chap = cands[0]["category"], cands[0]["chapter"]
-            if stage_raw is None:
-                return f"{cat}／{chap}"
-            # 找关卡：优先本章内匹配
-            in_ch = self.con.execute(
-                "SELECT title, category, chapter FROM stages WHERE chapter=? AND (title=? OR title LIKE ?)",
-                (chap, stage_raw, f"%{bare(stage_raw)}%")).fetchall()
-            if in_ch:
-                r = in_ch[0]
-                return f"{r['category']}／{r['chapter']}／{r['title']}"
-            # 模型常把 "ER12-2滚雪" 写成 "ER12-2 滚雪"，忽略空格再试一次
-            other = self.con.execute(
-                "SELECT title, category, chapter, seq FROM stages "
-                "WHERE title=? OR title LIKE ? OR REPLACE(title,' ','')=?",
-                (stage_raw, f"%{bare(stage_raw)}%", (stage_raw or "").replace(" ", ""))).fetchall()
-            if len(other) == 1:
-                r = other[0]
-                return f"{r['category']}／{r['chapter']}／{r['title']}"
+        b = (body or "").replace("／", "/").strip()
+        if not b:
             return None
+        rows = self._stage_rows()
+
+        # 1) 章节名 + 关卡名都在标签里：取覆盖最长的那一行
+        best, best_len = None, 0
+        for r in rows:
+            ch, ti = r["chapter"], r["title"]
+            if ch and ti and ch.replace(" ", "") in b.replace(" ", "") \
+                    and ti.replace(" ", "") in b.replace(" ", ""):
+                if len(ch) + len(ti) > best_len:
+                    best, best_len = r, len(ch) + len(ti)
+        if best:
+            return f"{best['category']}／{best['chapter']}／{best['title']}"
+
+        # 2) 关卡名唯一命中（模型少写了章节）
+        hits = [r for r in rows if r["title"] and r["title"].replace(" ", "") in b.replace(" ", "")]
+        if len(hits) == 1:
+            r = hits[0]
+            return f"{r['category']}／{r['chapter']}／{r['title']}"
+
+        # 3) 只写了章节：按章节最长的包含匹配
+        chap_hits = [r for r in rows if r["chapter"] and r["chapter"].replace(" ", "") in b.replace(" ", "")]
+        if chap_hits:
+            chap_hits.sort(key=lambda r: -len(r["chapter"]))
+            r = chap_hits[0]
+            return f"{r['category']}／{r['chapter']}"
+        return None
 
     def verify_and_fix(self, answer: str) -> tuple[str, list[dict]]:
         """把答案里的每条【…】对回数据库：能对上的改成规范写法，对不上的标注未核实。"""
