@@ -126,8 +126,13 @@
   .card p{margin:0 0 12px}
   .card p:last-child{margin-bottom:0}
   .cite{color:var(--accent);white-space:nowrap}
+  /* 能点：金色 + 下划虚线 + 手型；悬停有底色 */
   a.cite{cursor:pointer;border-bottom:1px dotted rgba(var(--accent-rgb),.5);text-decoration:none}
   a.cite:hover{background:rgba(var(--accent-rgb),.12);border-bottom-color:var(--accent)}
+  /* 点不动的：灰掉、没有下划线、鼠标显示"有问题"，点击会说明原因 */
+  span.cite{color:var(--fg-faint);cursor:help;border-bottom:0}
+  span.cite:hover{text-decoration:underline dotted}
+  /* 未核实：红色删除线，和上面两种都不混 */
   .cite.bad{color:var(--warn);text-decoration:line-through}
   .card strong{color:var(--fg);font-weight:600}
   .card strong.h{display:block;margin:20px 0 8px;font-size:15px;color:var(--accent)}
@@ -977,6 +982,16 @@ if(new URLSearchParams(location.search).get('clicktest') === '1'){
     const last = turns[turns.length - 1];
     out.lastTurnAnchors = last ? last.querySelectorAll('a.cite[data-seq]').length : -1;
     out.lastTurnSpans = last ? last.querySelectorAll('span.cite').length : -1;
+    // 不变式：不可点的出处必须都带 data-nocite，否则又会变成"点了没反应"
+    const plainSpan = document.querySelector('#list span.cite[data-nocite]:not(.bad)');
+    if(plainSpan){
+      const pr = plainSpan.getBoundingClientRect();
+      out.plainSpanRect = {x: Math.round(pr.left), y: Math.round(pr.top + scrollY), w: Math.round(pr.width)};
+      out.plainSpanText = plainSpan.textContent.slice(0, 30);
+    }
+    const allSpans = [...document.querySelectorAll('#list span.cite')];
+    out.spansTotal = allSpans.length;
+    out.spansWithoutExplain = allSpans.filter(x => !x.hasAttribute('data-nocite')).length;
 
     // 关键：点在哪、那个位置最上层是谁
     const a = last && last.querySelector('a.cite[data-seq]');
