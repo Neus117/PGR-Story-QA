@@ -14,7 +14,7 @@ from datetime import datetime
 from .paths import DATA as _DATA
 
 DB = str(_DATA / "history.db")
-CITE_RE = re.compile(r"【([^】]{3,60})】")
+from .tools import CITE_RE      # 解析范围只留一处定义，避免两边漂移
 
 
 class History:

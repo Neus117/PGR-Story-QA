@@ -202,6 +202,29 @@ def t_data(health: dict):
 
 
 # ---------------------------------------------------------------- 9. 语料残留
+def t_citation_health():
+    """历史里每条「分类／章节…」形式的出处都必须能对回关卡。"""
+    import re
+    con = sqlite3.connect(DATA / "history.db")
+    con.row_factory = sqlite3.Row
+    turns = [dict(r) for r in con.execute("SELECT id, answer FROM turns")]
+    con.close()
+    from pgr.tools import Toolbox
+    box = Toolbox()
+    cite = re.compile(r"【([^】]{2,80})】")
+    bad = []
+    n = 0
+    for t in turns:
+        for m in cite.findall(t["answer"] or ""):
+            if "／" not in m or m.startswith("未核实："):
+                continue
+            n += 1
+            if not box.resolve_row(m):
+                bad.append((t["id"], m))
+    check(f"出处可解析（{n} 条标注）", not bad,
+          "全部能对回关卡" if not bad else f"对不上：{bad[:3]}")
+
+
 def t_cost_recompute():
     """有用量拆分的记录，必须能用价目表复算出与记录一致的花费。"""
     from pgr import pricing
@@ -328,6 +351,7 @@ def run_all() -> int:
     t_concurrency()
     t_sse()
     t_data(health)
+    t_citation_health()
     t_cost_recompute()
     t_markup()
     t_static()

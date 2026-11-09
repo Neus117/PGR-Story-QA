@@ -234,54 +234,78 @@ class Toolbox:
             self._rows_cache = rows
         return self._rows_cache
 
-    def resolve_cite(self, body: str) -> str | None:
-        """把模型写的【分类／章节／关卡】对回数据库里的规范写法。
+    def resolve_row(self, body: str) -> dict | None:
+        """把【分类／章节／关卡】对回库里的一行；对不上返回 None。
 
-        用「包含匹配」而不是按分隔符切分：好感度剧情的章节名里本身就带斜杠
-        （如 赛琳娜·希声/好感剧情），一旦按 ／ 切开就错位，整条引用会变成未核实。
+        做法：按 ／ 和 / 切段后**整段比对**，不做裸包含——
+        章节基名可能是「剧情」这种两字通用词，裸包含会把任何标签都匹配上。
+        兼容这些写法：
+          · 章节名自带斜杠（赛琳娜·希声/好感剧情）→ 与整段比较；
+          · 只写角色名（诺安·逆旅／其之二）→ 与该章节的基名比较；
+          · 多目标（27-1葬礼、27-2黄金时代）→ 拆开后取第一个能对上的；
+          · 没有 seq 的旁支文档一律跳过（打开会 404）。
+        返回 {seq, category, chapter, title, kind}，kind 为 stage / chapter。
         """
-        b = (body or "").replace("／", "/").strip()
-        if not b:
+        raw = (body or "").strip()
+        if not raw:
             return None
-        rows = self._stage_rows()
+        rows = [r for r in self._stage_rows() if r["seq"]]
+        if not rows:
+            return None
 
-        # 1) 章节名 + 关卡名都在标签里：取覆盖最长的那一行
-        best, best_len = None, 0
-        for r in rows:
-            ch, ti = r["chapter"], r["title"]
-            if ch and ti and ch.replace(" ", "") in b.replace(" ", "") \
-                    and ti.replace(" ", "") in b.replace(" ", ""):
-                if len(ch) + len(ti) > best_len:
-                    best, best_len = r, len(ch) + len(ti)
-        if best:
-            return f"{best['category']}／{best['chapter']}／{best['title']}"
+        def norm(x: str) -> str:
+            x = (x or "").replace("／", "/").replace(" ", "").strip()
+            # 「… 等」表示还有别的关卡，剥掉再比对
+            for tail in ("等等", "等", "…"):
+                if x.endswith(tail) and len(x) > len(tail) + 1:
+                    x = x[: -len(tail)]
+                    break
+            return x
 
-        # 2) 关卡名唯一命中（模型少写了章节）
-        hits = [r for r in rows if r["title"] and r["title"].replace(" ", "") in b.replace(" ", "")]
-        if len(hits) == 1:
-            r = hits[0]
-            return f"{r['category']}／{r['chapter']}／{r['title']}"
+        def attempts(text: str):
+            """把一段标签拆成多组候选段落列表：整体、去分类、按多目标拆开。"""
+            out = []
+            for sep in ("、", "，", "；", ";"):
+                if sep in text:
+                    out += [[norm(x)] for x in text.split(sep) if x.strip()]
+            parts = [x for x in text.replace("/", "／").split("／") if x.strip()]
+            if parts:
+                out.append([norm(x) for x in parts])
+                if len(parts) >= 3:
+                    out.append([norm(x) for x in parts[1:]])   # 去掉分类
+            return out
 
-        # 3) 只写了章节：按章节最长的包含匹配
-        flat = b.replace(" ", "")
-        chap_hits = []
-        for r in rows:
-            if not r["seq"]:
+        for segs in attempts(raw):
+            if not segs:
                 continue
-            ch = (r["chapter"] or "").replace(" ", "")
-            if not ch:
-                continue
-            if ch in flat:
-                chap_hits.append((len(ch), r))
-            else:
+            want_cat = segs[0] if len(segs) >= 3 else ""
+            # 1) 关卡级：某段落等于关卡名（或去掉空格后相等）
+            for r in rows:
+                ti, ch = norm(r["title"]), norm(r["chapter"])
+                if any(ti == seg or (len(seg) >= 4 and ti.endswith(seg)) for seg in segs):
+                    if want_cat and norm(r["category"]) != want_cat:
+                        continue
+                    return {"seq": r["seq"], "category": r["category"],
+                            "chapter": r["chapter"], "title": r["title"], "kind": "stage"}
+            # 2) 章节级：某段落等于章节全名或其基名
+            for r in rows:
+                ch = norm(r["chapter"])
                 base = ch.split("/")[0]
-                if base and base in flat:
-                    chap_hits.append((len(base), r))
-        if chap_hits:
-            chap_hits.sort(key=lambda x: -x[0])
-            r = chap_hits[0][1]
-            return f"{r['category']}／{r['chapter']}"
+                if any(seg == ch or seg == base for seg in segs):
+                    if want_cat and norm(r["category"]) != want_cat:
+                        continue
+                    return {"seq": r["seq"], "category": r["category"],
+                            "chapter": r["chapter"], "title": r["title"], "kind": "chapter"}
         return None
+
+    def resolve_cite(self, body: str) -> str | None:
+        """规范写法：章节级匹配返回「分类／章节」，关卡级返回「分类／章节／关卡」。"""
+        row = self.resolve_row(body)
+        if not row:
+            return None
+        if row["kind"] == "chapter":
+            return f'{row["category"]}／{row["chapter"]}'
+        return f'{row["category"]}／{row["chapter"]}／{row["title"]}'
 
     def verify_and_fix(self, answer: str) -> tuple[str, list[dict]]:
         """把答案里的每条【…】对回数据库：能对上的改成规范写法，对不上的标注未核实。"""

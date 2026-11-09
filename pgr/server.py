@@ -114,36 +114,16 @@ def _enrich_citations(cites: list) -> list:
             continue
         label = c.get("label") or ""
         row = None
-        chapter_only = False
         try:
-            # 用包含匹配：章节名可能自带斜杠（赛琳娜·希声/好感剧情），切开就错位
-            norm_label = label.replace("／", "/").replace(" ", "")
-            best_len = 0
-            for r in _cite_rows():
-                ch = (r["chapter"] or "").replace(" ", "")
-                ti = (r["title"] or "").replace(" ", "")
-                if ch and ti and ch in norm_label and ti in norm_label:
-                    if len(ch) + len(ti) > best_len:
-                        row, best_len = r, len(ch) + len(ti)
-            if row is None:
-                # 只写了章节（如「好感度剧情／赛琳娜·希声／好感剧情」）：
-                # 取该章第一关，至少让人点得开
-                best_len = 0
-                for r in _cite_rows():
-                    if not r["seq"]:      # 没有序号的旁支文档打不开，跳过
-                        continue
-                    ch = (r["chapter"] or "").replace(" ", "")
-                    base = ch.split("/")[0]
-                    # 全名优先；正文常写成「角色／其之二」，这时用章节基名也能对上
-                    for key in (ch, base):
-                        if key and key in norm_label and len(key) > best_len:
-                            row, best_len, chapter_only = r, len(key), True
+            # 解析只走一份实现：章节名自带斜杠、多目标写法、无序号旁支都在那里处理
+            row = _cite_box().resolve_row(label)
         except Exception:
             row = None
         if row is None:
             out.append({"label": label, "unverified": True})
             continue
         # 只匹配到章节时保留原标签：正文写的就是这个写法，改写成关卡名会让前端索引对不上
+        chapter_only = (row.get("kind") == "chapter")
         canon = label if chapter_only else f'{row["category"]}／{row["chapter"]}／{row["title"]}'
         out.append({
             "label": canon,
