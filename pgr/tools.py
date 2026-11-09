@@ -263,10 +263,23 @@ class Toolbox:
             return f"{r['category']}／{r['chapter']}／{r['title']}"
 
         # 3) 只写了章节：按章节最长的包含匹配
-        chap_hits = [r for r in rows if r["chapter"] and r["chapter"].replace(" ", "") in b.replace(" ", "")]
+        flat = b.replace(" ", "")
+        chap_hits = []
+        for r in rows:
+            if not r["seq"]:
+                continue
+            ch = (r["chapter"] or "").replace(" ", "")
+            if not ch:
+                continue
+            if ch in flat:
+                chap_hits.append((len(ch), r))
+            else:
+                base = ch.split("/")[0]
+                if base and base in flat:
+                    chap_hits.append((len(base), r))
         if chap_hits:
-            chap_hits.sort(key=lambda r: -len(r["chapter"]))
-            r = chap_hits[0]
+            chap_hits.sort(key=lambda x: -x[0])
+            r = chap_hits[0][1]
             return f"{r['category']}／{r['chapter']}"
         return None
 

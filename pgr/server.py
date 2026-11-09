@@ -114,6 +114,7 @@ def _enrich_citations(cites: list) -> list:
             continue
         label = c.get("label") or ""
         row = None
+        chapter_only = False
         try:
             # 用包含匹配：章节名可能自带斜杠（赛琳娜·希声/好感剧情），切开就错位
             norm_label = label.replace("／", "/").replace(" ", "")
@@ -129,16 +130,23 @@ def _enrich_citations(cites: list) -> list:
                 # 取该章第一关，至少让人点得开
                 best_len = 0
                 for r in _cite_rows():
+                    if not r["seq"]:      # 没有序号的旁支文档打不开，跳过
+                        continue
                     ch = (r["chapter"] or "").replace(" ", "")
-                    if ch and ch in norm_label and len(ch) > best_len:
-                        row, best_len = r, len(ch)
+                    base = ch.split("/")[0]
+                    # 全名优先；正文常写成「角色／其之二」，这时用章节基名也能对上
+                    for key in (ch, base):
+                        if key and key in norm_label and len(key) > best_len:
+                            row, best_len, chapter_only = r, len(key), True
         except Exception:
             row = None
         if row is None:
             out.append({"label": label, "unverified": True})
             continue
+        # 只匹配到章节时保留原标签：正文写的就是这个写法，改写成关卡名会让前端索引对不上
+        canon = label if chapter_only else f'{row["category"]}／{row["chapter"]}／{row["title"]}'
         out.append({
-            "label": f'{row["category"]}／{row["chapter"]}／{row["title"]}',
+            "label": canon,
             "category": row["category"], "chapter": row["chapter"],
             "title": row["title"], "seq": row["seq"],
             "url": "https://wiki.biligame.com/zspms/"

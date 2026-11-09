@@ -432,7 +432,15 @@ function renderPast(turn, item){
     : `<span class="src flat"><span class="tt">${esc(c.label||'')}</span></span>`;
   const cites = (item.citations||[]).map(citeCard).join('');
   const labelMap = {};
-  (item.citations||[]).forEach(c => { if(c.label && c.seq) labelMap[c.label] = c; });
+  (item.citations||[]).forEach(c => {
+    if(!c.label || !c.seq) return;
+    labelMap[c.label] = c;
+    if(c.category && c.chapter){
+      labelMap[c.category + '／' + c.chapter] = c;
+      const base = String(c.chapter).split('/')[0];
+      if(base && base !== c.chapter) labelMap[c.category + '／' + base] = c;
+    }
+  });
   const body = (item.answer||'').split(/\n{2,}/)
     .map(pp => `<p>${rich(pp, labelMap).replace(/\n/g,'<br>')}</p>`).join('');
   turn.innerHTML = `<div class="q">${esc(item.question)}</div>
@@ -735,7 +743,19 @@ function esc(s){ return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&
 function rich(s, labelMap){
   // 必须拼成一行：调用方会对整段做 \n -> <br>，多行标签会被拆坏
   const link = (raw) => {
-    const hit = labelMap && labelMap[raw];
+    let hit = labelMap && labelMap[raw];
+    if(!hit && labelMap){
+      // 正文可能写成「章节／其之二」这类半截形式：找最长的、被正文包含的已知标签
+      const flat = raw.replace(/\s/g, '');
+      let best = null, bestLen = 0;
+      for(const k in labelMap){
+        const kf = k.replace(/\s/g, '');
+        if(kf.length > bestLen && flat.includes(kf)){
+          best = labelMap[k]; bestLen = kf.length;
+        }
+      }
+      hit = best;
+    }
     if(!hit || !hit.seq){
       // 解析不到关卡：仍然是死元素，但至少说明为什么，并把原因挂出来
       return `<span class="cite" data-nocite="1" title="这条例句在库里对不上具体关卡，无法打开原文">【${raw}】</span>`;
@@ -772,7 +792,17 @@ function render(turn, d){
   const allCites = d.citations||[];
   // 正文里的【分类／章节／关卡】与下方出处是同一批，用标签建索引让正文也能点
   const labelMap = {};
-  allCites.forEach(c => { if(c.label && c.seq) labelMap[c.label] = c; });
+  // 正文可能只写章节（好感度剧情的章节名自带斜杠），出处列表里却是关卡级：
+  // 同时按「分类／章节」建一个键，两种写法都能点到同一个关卡
+  allCites.forEach(c => {
+    if(!c.label || !c.seq) return;
+    labelMap[c.label] = c;
+    if(c.category && c.chapter){
+      labelMap[c.category + '／' + c.chapter] = c;
+      const base = String(c.chapter).split('/')[0];
+      if(base && base !== c.chapter) labelMap[c.category + '／' + base] = c;
+    }
+  });
   const citeCard = c => c.seq
     ? `<a class="src" href="javascript:void 0" data-seq="${c.seq}"
           data-title="${esc(c.title||'')}" data-sub="${esc((c.category||'')+'／'+(c.chapter||''))}">
