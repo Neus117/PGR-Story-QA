@@ -11,7 +11,7 @@ import urllib.request
 from . import llm, pricing
 from .tools import TOOL_SPECS, Toolbox
 
-MAX_STEPS = 10
+MAX_STEPS = 8          # 历史步数中位 7、P75 8；10 步的样本有 5 条且最慢
 MAX_READS = 6          # 最多读几段原文，防止无节制通读
 MAX_PROMPT_TOKENS = 240000     # 单次提问的累计预算，超了就强制收敛
 TOOL_RESULT_CAP = 14000        # 单个工具结果进上下文的上限（字符）
@@ -24,7 +24,14 @@ SYSTEM = """你是《战双帕弥什》的剧情资料助手。你有一批工�
 - 一次可以连续调多个工具；读到的内容不够就再读，不要拿"没查到"当结论。
 - 章节名一律照工具返回的原名使用，不要自己编号或改叫法。
 
+检索预算（务必遵守）：
+- 总共最多 6 次检索就要收口作答。多数问题 3~4 次检索已经够。
+- 需要上下文时**优先 read_chapter 一次读完整章**，不要用 search_lines 反复试探。
+- 拿到 2~3 条关键证据就停下来回答，不要为了"更全"继续翻。
+
 回答要求：
+0. **全文控制在 700 字以内（硬上限 800）**。角色故事类尤其注意：只写结论与几条关键依据，其余用出处覆盖，
+   不要复述大段原文。宁可少写，把覆盖交给【分类／章节／关卡】标注。
 1. 中文，先给结论，再给依据。
 2. 事实性结论后面标注出处，格式【分类／章节／关卡】，取自工具结果里的 cite。
 3. 原文没有直接记载但有线索时，明确写「推断」并列出依据；连线索都没有才说「没有相关数据」。
@@ -33,12 +40,13 @@ SYSTEM = """你是《战双帕弥什》的剧情资料助手。你有一批工�
 """
 
 
-def _chat(messages: list[dict], tools: list[dict] | None) -> tuple[dict, dict, str]:
+def _chat(messages: list[dict], tools: list[dict] | None,
+          max_tokens: int = 3000) -> tuple[dict, dict, str]:
     cfg = llm.load_config()
     if not cfg["api_key"]:
         return {}, {}, "未配置 API Key"
     payload = {"model": cfg["model"], "messages": messages,
-               "temperature": 0.3, "max_tokens": 3000}
+               "temperature": 0.3, "max_tokens": max_tokens}
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
@@ -107,7 +115,8 @@ def run(question: str, memories: list[dict] | None = None,
                 "阅读预算已用完。现在必须基于已经读到的内容直接回答；"
                 "没覆盖到的部分，说明你的答案覆盖了哪些章节即可，不要再调工具。"})
             nudged = True
-        msg, usage, err = _chat(messages, None if must_answer else TOOL_SPECS)
+        msg, usage, err = _chat(messages, None if must_answer else TOOL_SPECS,
+                                max_tokens=1200 if must_answer else 3000)
         if err:
             return {"answer": last_text, "mode": "error", "steps": step,
                     "tool_calls": trace, "usage": total, "note": err}
