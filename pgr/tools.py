@@ -309,6 +309,48 @@ class Toolbox:
             return None
         return f'{row["category"]}／{row["chapter"]}／{row["title"]}'
 
+    def coverage(self, answer: str) -> dict:
+        """事实句的出处覆盖率。
+
+        只算「事实句」：含「…」引号原句，或提到库里存在的角色/章节名。
+        模型自己的推断句本来就不该标出处，混进来会把数字压低、失去指导意义。
+        """
+        import re as _re
+        if not answer:
+            return {"factual": 0, "cited": 0, "ratio": 1.0, "bare": []}
+        names = getattr(self, "_names_cache", None)
+        if names is None:
+            try:
+                rows = self.con.execute(
+                    "SELECT name FROM speakers WHERE n >= 20 LIMIT 4000").fetchall()
+                chaps = self.con.execute(
+                    "SELECT DISTINCT chapter FROM stages").fetchall()
+                names = {r[0] for r in rows if r[0] and len(r[0]) >= 2}
+                names |= {c[0] for c in chaps if c[0]}
+                self._names_cache = names
+            except Exception:
+                names = set()
+                self._names_cache = names
+
+        masked = _re.sub(r"「[^」]*」", "「引」", answer)
+        parts = _re.split(r"(?<=[。！？；])", masked)
+        factual, cited, bare = 0, 0, []
+        for x in parts:
+            body = x.strip()
+            if len(body) < 12:
+                continue
+            has_quote = "「引」" in body or "「" in body
+            has_name = any(n in body for n in names) if names else False
+            if not (has_quote or has_name):
+                continue
+            factual += 1
+            if "【" in body:
+                cited += 1
+            else:
+                bare.append(body[:40])
+        return {"factual": factual, "cited": cited,
+                "ratio": (cited / factual) if factual else 1.0, "bare": bare[:5]}
+
     def verify_and_fix(self, answer: str) -> tuple[str, list[dict]]:
         """把答案里的每条【…】对回数据库：能对上的改成规范写法，对不上的标注未核实。"""
         fixes: list[dict] = []

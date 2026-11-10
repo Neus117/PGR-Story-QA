@@ -167,7 +167,7 @@ python -m pgr.update --force              :: 只看有没有更新（只读，2 
 | `python scripts\check_robust.py` | 接口健壮性（14 项：非法参数、超长、注入、边界） |
 | `python scripts\eval_agent.py` | 27 题固定回归题集，报通过率与花费 |
 | `python scripts\verify_parse.py` | 检查解析残留的模板标记 |
-| `python scripts\audit_full.py` | **全面健壮性审计**（41 项：接口 / 输入边界 / 密钥泄漏 / 并发 / 数据完整性 / 语料残留 / 静态扫描），自起独立实例，失败返回 1 |
+| `python scripts\audit_full.py` | **全面健壮性审计**（42 项：接口 / 输入边界 / 密钥泄漏 / 并发 / 数据完整性 / 语料残留 / 静态扫描），自起独立实例，失败返回 1 |
 | `python scripts\check_markup.py` | 语料残留门禁：有维基源码漏进正文就返回 1 |
 | `python scripts\audit_cost.py` | 用存下的用量拆分复算每次提问的花费，与记录值对照 |
 | `python scripts\check_layout.py` | 页脚几何门禁：按钮与输入框齐平、复选框同左缘、版本号居中（容差 1px，深浅两主题都测） |

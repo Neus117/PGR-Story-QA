@@ -202,6 +202,25 @@ def t_data(health: dict):
 
 
 # ---------------------------------------------------------------- 9. 语料残留
+def t_citation_coverage():
+    """事实句的出处覆盖率：太低说明模型在写无出处的断言。"""
+    from pgr.tools import Toolbox
+    con = sqlite3.connect(DATA / "history.db")
+    con.row_factory = sqlite3.Row
+    rows = [dict(r) for r in con.execute(
+        "SELECT answer FROM turns WHERE id > 45 ORDER BY id DESC LIMIT 10")]
+    con.close()
+    box = Toolbox()
+    f = c = 0
+    for r in rows:
+        cv = box.coverage(r["answer"])
+        f += cv["factual"]
+        c += cv["cited"]
+    ratio = (c / f) if f else 1.0
+    # 分析型回答本就偏低，这里只守一个低水位：跌破 25% 说明基本不标了
+    check(f"事实句出处覆盖率（{c}/{f}）", ratio >= 0.25, f"{ratio:.0%}")
+
+
 def t_citation_health():
     """历史里每条「分类／章节…」形式的出处都必须能对回关卡。"""
     import re
@@ -351,6 +370,7 @@ def run_all() -> int:
     t_concurrency()
     t_sse()
     t_data(health)
+    t_citation_coverage()
     t_citation_health()
     t_cost_recompute()
     t_markup()
