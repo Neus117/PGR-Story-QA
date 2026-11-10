@@ -11,7 +11,8 @@ DATA = Path(__file__).resolve().parent.parent / "data"
 PATH = DATA / "settings.json"
 
 # 默认值就是此前写死的常量：8 步、800 字
-DEFAULTS = {"max_steps": 8, "max_answer_chars": 800}
+# 步数默认取历史中位数 7（P75 是 8，10 步的样本明显更慢）
+DEFAULTS = {"max_steps": 7, "max_answer_chars": 800}
 
 LIMITS = {"max_steps": (2, 10), "max_answer_chars": (200, 2000)}
 
