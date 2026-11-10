@@ -172,6 +172,8 @@ python -m pgr.update --force              :: 只看有没有更新（只读，2 
 | `python scripts\audit_cost.py` | 用存下的用量拆分复算每次提问的花费，与记录值对照 |
 | `python scripts\check_layout.py` | 页脚几何门禁：按钮与输入框齐平、复选框同左缘、版本号居中（容差 1px，深浅两主题都测） |
 | `python scripts\audit.py` | 语料体量与分布审计 |
+| `python scripts\check_citations.py` | 出处门禁：历史里每条「分类／章节…」标注都必须能对回关卡 |
+| `python scripts\clean_test_history.py` | 清理测试提问（只按 `S-` / `_t:` session 前缀删，先备份） |
 
 ## 已知限制
 
@@ -208,6 +210,7 @@ PGR-Story-QA/
   PGR-QA.png                图标预览
   logs/app.log              运行日志（1 MB 轮转，自动创建）
   config.example.json       配置样例
+  docs/releases/            各版本发布说明
   CLEANING.md               清洗规则（新增内容按此复用）
   README.md
   data/                     运行数据（已 gitignore，用 bootstrap 重建）

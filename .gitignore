@@ -5,6 +5,10 @@ cache/
 # 密钥
 config.json
 
+# 临时文件（我的探针/截图，不进仓库）
+_*.png
+_*.py
+
 # 运行产物
 _run.log
 _run.log.err
