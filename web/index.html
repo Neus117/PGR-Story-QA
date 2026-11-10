@@ -114,6 +114,9 @@
     background:var(--accent);border:0}
   .setnote{font-size:12px;line-height:1.7;color:var(--fg-faint)}
   .setnote b{color:var(--fg);font-weight:500}
+  .sethint{margin-top:12px;font-size:12px;line-height:1.6}
+  .sethint.ok{color:var(--accent)}
+  .sethint.bad{color:var(--warn)}
   .setfoot{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
   .setbtn{font:inherit;font-size:13px;padding:8px 16px;border-radius:6px;cursor:pointer;
     background:var(--accent);color:#1a1200;border:1px solid transparent}
@@ -1107,8 +1110,8 @@ function closeSettings(){ setDlg.hidden = true; }
 
 document.getElementById('setBtn').addEventListener('click', openSettings);
 setDlg.addEventListener('click', e => { if(e.target.closest('[data-setclose]')) closeSettings(); });
-stepsRange.addEventListener('input', renderSettings);
-charsRange.addEventListener('input', renderSettings);
+stepsRange.addEventListener('input', () => { setHint.textContent = ''; renderSettings(); });
+charsRange.addEventListener('input', () => { setHint.textContent = ''; renderSettings(); });
 
 document.getElementById('setReset').addEventListener('click', () => {
   stepsRange.value = 7; charsRange.value = 800; renderSettings();
@@ -1122,12 +1125,16 @@ document.getElementById('setSave').addEventListener('click', async () => {
     const d = await r.json();
     if(d.ok){
       SET = d.settings;
-      setHint.textContent = `已保存：${d.settings.max_steps} 步 / ${d.settings.max_answer_chars} 字，下一次提问生效。`;
-      setTimeout(closeSettings, 900);
+      setHint.className = 'meta sethint ok';
+      setHint.textContent = `已保存：${d.settings.max_steps} 步 / ${d.settings.max_answer_chars} 字 —— 下一次提问生效。`;
+      // 不自动关闭：提示要让人看完，关窗由用户自己点
+      loadSettings();
     }else{
+      setHint.className = 'meta sethint bad';
       setHint.textContent = d.message || '保存失败';
     }
   }catch(e){
+    setHint.className = 'meta sethint bad';
     setHint.textContent = '保存失败：' + (e.message || e);
   }
 });
