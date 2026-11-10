@@ -237,7 +237,7 @@ def _account(usage: dict, model: str) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "PGRStory/1.0"
+    server_version = "PGRStory/1.1"
 
     def log_message(self, fmt, *args):
         print(f"  {self.address_string()} {fmt % args}", flush=True)
