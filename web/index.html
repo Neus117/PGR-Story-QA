@@ -100,6 +100,25 @@
     .waiting-bar i{animation:none;left:0;width:100%;opacity:.45}
   }
 
+  /* 设置浮窗 */
+  .setrow{padding:14px 0;border-bottom:1px solid var(--line)}
+  .setrow:first-child{padding-top:0}
+  .sethead{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+  .setname{font-size:14px;color:var(--fg)}
+  .setval{font-size:13px;color:var(--accent);font-variant-numeric:tabular-nums}
+  .setrange{-webkit-appearance:none;appearance:none;width:100%;height:4px;margin:12px 0 8px;
+    border-radius:2px;background:var(--panel-2);outline:none;cursor:pointer}
+  .setrange::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;
+    border-radius:50%;background:var(--accent);border:0;cursor:pointer}
+  .setrange::-moz-range-thumb{width:16px;height:16px;border-radius:50%;
+    background:var(--accent);border:0}
+  .setnote{font-size:12px;line-height:1.7;color:var(--fg-faint)}
+  .setnote b{color:var(--fg);font-weight:500}
+  .setfoot{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+  .setbtn{font:inherit;font-size:13px;padding:8px 16px;border-radius:6px;cursor:pointer;
+    background:var(--accent);color:#1a1200;border:1px solid transparent}
+  .setbtn.ghost{background:transparent;color:var(--fg);border-color:var(--line)}
+
   .boot{
     position:fixed;inset:0;z-index:200;display:none;align-items:center;justify-content:center;
     background:var(--bg);transition:opacity .3s ease;
@@ -312,6 +331,16 @@
   <button class="upd" id="browseBtn" title="按章节或关键词浏览剧情原文">原文</button>
   <button class="upd icon" id="themeBtn" title="切换深色 / 浅色" aria-label="切换深色 / 浅色"></button>
   <button class="upd" id="updBtn" title="检查 wiki 是否有新内容；更新会抓取并重建索引。不要频繁点击，会触发站点限流。">更新语料</button>
+  <button class="upd icon" id="setBtn" title="回答设置（步数 / 字数）"
+          aria-label="回答设置">
+    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <path d="M3 8h18"/><path d="M3 16h18"/>
+      </g>
+      <circle cx="9" cy="8" r="2.6" fill="currentColor"/>
+      <circle cx="15" cy="16" r="2.6" fill="currentColor"/>
+    </svg>
+  </button>
   <button class="upd" id="keyBtn"
           title="填写 / 更换 DeepSeek API Key">设置密钥</button>
   <span class="badge" id="mode">…</span>
@@ -320,6 +349,43 @@
 <main id="main"><div class="wrap" id="list">
   <div class="empty">问一句剧情，答案带出处。<br>例：露西亚第一次登场是在哪里？第12章讲了什么？</div>
 </div></main>
+
+<div class="viewer" id="setdlg" hidden>
+  <div class="viewer-backdrop" data-setclose="1"></div>
+  <div class="viewer-panel" role="dialog" aria-modal="true"
+       style="width:min(560px,calc(100vw - 48px))">
+    <div class="viewer-head">
+      <div>
+        <div class="viewer-title">回答设置</div>
+        <div class="viewer-sub" id="setSub">改完立刻生效，不用重启</div>
+      </div>
+      <button class="viewer-close" data-setclose="1">关闭 Esc</button>
+    </div>
+    <div class="viewer-body" style="white-space:normal">
+      <div class="setrow">
+        <div class="sethead">
+          <span class="setname">检索步数上限</span>
+          <span class="setval" id="stepsVal">8 步</span>
+        </div>
+        <input type="range" id="stepsRange" min="2" max="10" step="1" value="8" class="setrange">
+        <div class="setnote" id="stepsNote"></div>
+      </div>
+      <div class="setrow">
+        <div class="sethead">
+          <span class="setname">回答字数上限</span>
+          <span class="setval" id="charsVal">800 字</span>
+        </div>
+        <input type="range" id="charsRange" min="200" max="2000" step="50" value="800" class="setrange">
+        <div class="setnote" id="charsNote"></div>
+      </div>
+      <div class="setfoot">
+        <button class="setbtn ghost" id="setReset">恢复默认</button>
+        <button class="setbtn" id="setSave">保存</button>
+      </div>
+      <div class="meta" style="margin-top:12px" id="setHint"></div>
+    </div>
+  </div>
+</div>
 
 <div class="viewer" id="keydlg" hidden>
   <div class="viewer-backdrop" data-keyclose="1"></div>
@@ -940,8 +1006,14 @@ document.addEventListener('click', e => {
   }
 });
 document.addEventListener('keydown', e => {
+  if(e.key === 'Escape' && !setDlg.hidden) closeSettings();
   if(e.key === 'Escape' && !viewer.hidden) closeViewer();
 });
+
+// ---------- ?settings=1 打开设置浮窗（截图核对用） ----------
+if(new URLSearchParams(location.search).get('settings') === '1'){
+  setTimeout(() => { openSettings(); }, 600);
+}
 
 // ---------- ?scroll=N：把内容区滚到指定位置，供截图/核对 ----------
 (() => {
@@ -974,6 +1046,94 @@ if(new URLSearchParams(location.search).get('waitingtest') === '1'){
     document.body.appendChild(pre);
   }, 1200);
 }
+
+// ---------- 回答设置 ----------
+const setDlg = document.getElementById('setdlg');
+const stepsRange = document.getElementById('stepsRange');
+const charsRange = document.getElementById('charsRange');
+const setHint = document.getElementById('setHint');
+let SET = {max_steps: 8, max_answer_chars: 800};
+
+function fmtEstimate(steps, chars){
+  // 依据实测：每步 2~7 秒；8 步中位 ¥0.037、最慢 ¥0.10
+  const tLo = Math.round(1.8 * steps);
+  const tHi = Math.round(5.0 * steps);
+  const cLo = (0.0022 * steps + 0.004).toFixed(3);
+  const cHi = (0.0095 * steps + 0.010).toFixed(3);
+  const extra = Math.round((chars - 800) / 500);
+  return {tLo, tHi, cLo, cHi, extra};
+}
+
+function renderSettings(){
+  const steps = +stepsRange.value;
+  const chars = +charsRange.value;
+  document.getElementById('stepsVal').textContent = steps + ' 步';
+  document.getElementById('charsVal').textContent = chars + ' 字';
+  const e = fmtEstimate(steps, chars);
+
+  const stepTone = steps <= 4 ? '快，但可能只读到一半就作答'
+                 : steps >= 9 ? '最全，也最慢'
+                 : '平衡档';
+  document.getElementById('stepsNote').innerHTML =
+    `<b>每多 1 步 = 多问一次模型。</b>当前 <b>${stepTone}</b>，` +
+    `预计 <b>${e.tLo}~${e.tHi} 秒</b>、<b>¥${e.cLo}~¥${e.cHi}</b> 每次。<br>` +
+    `步数太少会拿不全证据就下结论；10 步最容易答得完整，代价是等待与花费都翻倍。`;
+
+  const charTone = chars <= 500 ? '很短，适合一句话结论'
+                  : chars >= 1600 ? '很长，适合通读式概述'
+                  : '常规篇幅';
+  document.getElementById('charsNote').innerHTML =
+    `<b>${charTone}。</b>字数是硬上限，超出会被截断，所以模型会写得更紧凑。<br>` +
+    `字数对等待影响小（2000 字比 800 字约多 2~5 秒、约多 ¥0.005），` +
+    `主要影响可读性：太短会把细节压掉。`;
+}
+
+async function loadSettings(){
+  try{
+    const r = await fetch('/api/settings');
+    const d = await r.json();
+    if(d.settings){
+      SET = d.settings;
+      stepsRange.value = SET.max_steps;
+      charsRange.value = SET.max_answer_chars;
+    }
+  }catch(e){}
+  renderSettings();
+}
+
+function openSettings(){
+  setDlg.hidden = false;
+  setHint.textContent = '';
+  loadSettings();
+}
+function closeSettings(){ setDlg.hidden = true; }
+
+document.getElementById('setBtn').addEventListener('click', openSettings);
+setDlg.addEventListener('click', e => { if(e.target.closest('[data-setclose]')) closeSettings(); });
+stepsRange.addEventListener('input', renderSettings);
+charsRange.addEventListener('input', renderSettings);
+
+document.getElementById('setReset').addEventListener('click', () => {
+  stepsRange.value = 8; charsRange.value = 800; renderSettings();
+});
+
+document.getElementById('setSave').addEventListener('click', async () => {
+  const body = {max_steps: +stepsRange.value, max_answer_chars: +charsRange.value};
+  try{
+    const r = await fetch('/api/settings', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if(d.ok){
+      SET = d.settings;
+      setHint.textContent = `已保存：${d.settings.max_steps} 步 / ${d.settings.max_answer_chars} 字，下一次提问生效。`;
+      setTimeout(closeSettings, 900);
+    }else{
+      setHint.textContent = d.message || '保存失败';
+    }
+  }catch(e){
+    setHint.textContent = '保存失败：' + (e.message || e);
+  }
+});
 
 // ---------- 流式问答 ----------
 

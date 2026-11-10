@@ -18,7 +18,7 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-from . import agent, config_api, llm, pricing, update as update_mod, websearch
+from . import agent, config_api, llm, pricing, settings, update as update_mod, websearch
 from .logfile import get as _log
 from .history import History as _History
 from .search import Searcher, SUMMARY_INTENT
@@ -478,6 +478,11 @@ class Handler(BaseHTTPRequestHandler):
                                "text": row["txt"] or ""})
         if path == "/api/events":
             return self._serve_events()
+        if path == "/api/settings":
+            return self._json({"ok": True, "settings": settings.load(),
+                               "defaults": settings.DEFAULTS,
+                               "limits": settings.LIMITS})
+
         if path == "/api/config":
             d = config_api.current()
             # 配置里写的是请求名，实际服务的是回包里的 model（旧别名会被路由到别的型号）
@@ -588,6 +593,17 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
+        if urlparse(self.path).path == "/api/settings":
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                patch = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+            except Exception as e:
+                return self._json({"ok": False, "message": f"请求体解析失败：{e}"}, 400)
+            eff = settings.save(patch)
+            _log().info("设置已更新：steps=%s chars=%s",
+                        eff["max_steps"], eff["max_answer_chars"])
+            return self._json({"ok": True, "settings": eff})
+
         if urlparse(self.path).path == "/api/config/key":
             try:
                 n = int(self.headers.get("Content-Length") or 0)

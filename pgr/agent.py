@@ -9,9 +9,9 @@ import urllib.error
 import urllib.request
 
 from . import llm, pricing
+from . import settings
 from .tools import TOOL_SPECS, Toolbox
 
-MAX_STEPS = 8          # 历史步数中位 7、P75 8；10 步的样本有 5 条且最慢
 MAX_READS = 6          # 最多读几段原文，防止无节制通读
 MAX_PROMPT_TOKENS = 240000     # 单次提问的累计预算，超了就强制收敛
 TOOL_RESULT_CAP = 14000        # 单个工具结果进上下文的上限（字符）
@@ -35,8 +35,8 @@ SYSTEM = """你是《战双帕弥什》的剧情资料助手。你有一批工�
 - 拿到 2~3 条关键证据就停下来回答，不要为了"更全"继续翻。
 
 回答要求：
-0. **全文控制在 700 字以内（硬上限 800）**。角色故事类尤其注意：只写结论与几条关键依据，其余用出处覆盖，
-   不要复述大段原文。宁可少写，把覆盖交给【分类／章节／关卡】标注。
+0. **全文长度以本次设置的字数上限为准**（见上一条 system 消息）。角色故事类尤其注意：
+   只写结论与几条关键依据，其余用出处覆盖，不要复述大段原文。
 1. 中文，先给结论，再给依据。
 2. **每一个陈述事实的句子后面都要标注出处**，格式【分类／章节／关卡】，
    直接照抄工具结果里的 cite（含关卡名，不要只写章节）。
@@ -88,7 +88,13 @@ def run(question: str, memories: list[dict] | None = None,
     细节一律重新检索。`history` 保留兼容，等价于把全文转成摘要。
     """
     box = Toolbox()
+    cfg = settings.load()
+    max_steps = int(cfg["max_steps"])
+    max_chars = int(cfg["max_answer_chars"])
     messages: list[dict] = [{"role": "system", "content": SYSTEM}]
+    # 单独一条 system：改字数上限不用动上面的大提示，避免破坏 prompt 缓存
+    messages.append({"role": "system", "content":
+        f"本次回答长度上限：{max_chars} 字。超过的部分会被截断，所以宁可写紧凑。"})
     mem = list(memories or [])
     if not mem and history:                     # 兼容旧调用：把全文当摘要用
         mem = [{"question": t.get("question"), "summary": (t.get("answer") or "")[:80]}
@@ -114,10 +120,10 @@ def run(question: str, memories: list[dict] | None = None,
     reads = 0
     nudged = False
 
-    for step in range(MAX_STEPS):
+    for step in range(max_steps):
         over_budget = total["total_tokens"] > MAX_PROMPT_TOKENS
         # 读够原文、或快到步数上限时，收走工具逼它作答——否则会一直读下去
-        must_answer = over_budget or reads >= MAX_READS or step >= MAX_STEPS - 1
+        must_answer = over_budget or reads >= MAX_READS or step >= max_steps - 1
         if must_answer and not nudged:
             messages.append({"role": "system", "content":
                 "阅读预算已用完。现在必须基于已经读到的内容直接回答；"
@@ -127,7 +133,7 @@ def run(question: str, memories: list[dict] | None = None,
             # 全程流式：正文边收边推；工具调用在流里累积
             text, usage, err, tcs = llm._chat_stream(
                 messages, lambda d: on_event({"type": "delta", "text": d}),
-                max_tokens=1200 if must_answer else 3000, temperature=0.3,
+                max_tokens=int(max_chars * 1.5) if must_answer else 3000, temperature=0.3,
                 tools=None if must_answer else TOOL_SPECS)
             usage = dict(usage or {})
             usage.setdefault("prompt_tokens", 0)
@@ -179,7 +185,7 @@ def run(question: str, memories: list[dict] | None = None,
     # 达到步数上限：拿最后一次文本收尾
     final, fixes = box.verify_and_fix(last_text or "")
     return {"answer": final or "（工具调用达到上限，未能完成回答）",
-            "mode": "max_steps", "steps": MAX_STEPS, "tool_calls": trace,
+            "mode": "max_steps", "steps": max_steps, "tool_calls": trace,
             "usage": total, "note": "达到工具调用步数上限",
             "citation_fixes": fixes}
 
